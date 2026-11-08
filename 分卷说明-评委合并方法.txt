@@ -1,0 +1,16 @@
+完整提交包（67MB）因 GitHub 网页单文件 25MB 限制拆为 4 卷。
+
+【下载全部 4 个分卷后合并还原】
+
+Windows (PowerShell，进入分卷所在目录):
+  copy /b 墨证InkProof_完整包.zip.001+墨证InkProof_完整包.zip.002+墨证InkProof_完整包.zip.003+墨证InkProof_完整包.zip.004 墨证InkProof_完整包.zip
+
+macOS / Linux:
+  cat 墨证InkProof_完整包.zip.0* > 墨证InkProof_完整包.zip
+
+解压 墨证InkProof_完整包.zip 即得完整提交包（含 README/VERIFY/全部代码与测试证据）。
+校验：合并后文件 MD5 = 87b8b505ae0cad0b88cd255f4ea6b776（70,877,770 字节 / 67.6MB）
+      SHA-256 前缀 = 59b434b43a3e0041
+
+【更简单的替代】墨证InkProof_代码精简版_网页上传用.zip（5.8MB，单文件）
+  = 全部代码与文档（1547 个文件），不含测试截图证据 PNG。日常审阅用它即可。
