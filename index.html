@@ -1,0 +1,3277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>墨证 InkProof · 创作记忆与过程证据层 — 黑客松本地 Demo（模拟演示）</title>
+<!--
+  ============================================================================
+  「墨证 InkProof」H11 黑客松本地 Demo —— 单文件、完全离线、无网络请求、无外部资源。
+  双击本文件即可在 Chrome / Edge 中运行。
+
+  ⚠️ 重要：本 Demo 中所有 AI 结果均为 MOCK（预置数据 + canvas 滤镜模拟），
+     没有调用任何真实模型、没有网络请求。界面角标与 README 均已显式标注。
+
+  对应 01-概念.md 三支柱：
+    P1 私人视觉记忆 —— 档案观察卡片（observed / inferred / user-confirmed 三态 + 置信度 + 锚点）
+    P2 过程证据链     —— 时间线事件 / AI 事件清单 / 图层与画布 SHA-256 / manifest / 零生成声明
+    P3 画布原生协作   —— 框选指认 → 观察与方向 → 模拟方案 → 落为新图层（可拖动/隐藏/删除）
+  ============================================================================
+-->
+<style>
+/* ===================== 设计 token（深色 UI，适配投屏） ===================== */
+:root{
+  --bg:#080b11;
+  --panel:#111824;
+  --panel2:#0d131d;
+  --line:#223047;
+  --line2:#1a2434;
+  --text:#e8eef8;
+  --muted:#8fa1ba;
+  --accent:#4c9aff;
+  --accent2:#22d3ee;
+  --observed:#94a3b8;
+  --inferred:#f0a83c;
+  --confirmed:#34d399;
+  --rejected:#f87171;
+  --radius:10px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg);color:var(--text);
+  font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+  font-size:14px;overflow:hidden;
+}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+button:disabled{cursor:not-allowed;opacity:.42}
+input[type=range]{accent-color:var(--accent);cursor:pointer}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:#243149;border-radius:4px}
+::-webkit-scrollbar-track{background:transparent}
+
+#app{display:flex;flex-direction:column;height:100vh;min-width:1120px}
+
+/* ===================== 顶栏 ===================== */
+.topbar{
+  display:flex;align-items:center;gap:14px;padding:9px 16px;
+  background:linear-gradient(180deg,#111927,#0b111a);
+  border-bottom:1px solid var(--line);flex:0 0 auto;z-index:10;
+}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.brand .mark{
+  width:38px;height:38px;border-radius:10px;flex:0 0 auto;
+  background:linear-gradient(135deg,#2563eb,#06b6d4);
+  display:grid;place-items:center;font-size:19px;color:#fff;
+  box-shadow:0 4px 16px rgba(37,99,235,.35);
+}
+.brand .title{font-size:16px;font-weight:650;letter-spacing:.02em;white-space:nowrap}
+.brand .title .ver{font-size:11px;font-weight:400;color:var(--muted);margin-left:7px}
+.brand .sub{font-size:11px;color:var(--muted);margin-top:1px;white-space:nowrap}
+.mock-pill{
+  display:flex;align-items:center;gap:7px;flex:0 0 auto;
+  font-size:11.5px;color:#fcd34d;background:#241b0a;
+  border:1px solid #6b4d14;border-radius:999px;padding:5px 11px;
+}
+.mock-pill .dot{width:6px;height:6px;border-radius:50%;background:#f59e0b;box-shadow:0 0 8px #f59e0b}
+.top-actions{margin-left:auto;display:flex;align-items:center;gap:8px}
+.btn{
+  padding:7px 12px;border:1px solid var(--line);border-radius:8px;
+  background:#141d2b;font-size:12.5px;color:#d6e1f0;white-space:nowrap;
+  transition:background .12s,border-color .12s;
+}
+.btn:hover{background:#1a2638;border-color:#33465f}
+.btn.primary{
+  background:linear-gradient(135deg,#2563eb,#0ea5e9);border-color:transparent;
+  color:#fff;font-weight:600;box-shadow:0 4px 14px rgba(37,99,235,.3);
+}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.tiny{padding:4px 9px;font-size:11.5px;border-radius:6px}
+.btn.danger{color:#fca5a5;border-color:#5b2323;background:#1e1113}
+.btn.danger:hover{background:#2a1518}
+.mode-switch{
+  display:flex;background:#0a0f18;border:1px solid var(--line);
+  padding:3px;border-radius:9px;gap:2px;
+}
+.mode-opt{
+  padding:5px 12px;border-radius:6px;font-size:12px;color:var(--muted);
+  transition:background .12s,color .12s;
+}
+.mode-opt:hover{color:#dbeafe}
+.mode-opt.active{background:#1c2a42;color:#bfdbfe;font-weight:600}
+.mode-opt.active[data-mode=evidence]{background:#2b210d;color:#fcd34d}
+
+/* ===================== 工作区 ===================== */
+.workspace{flex:1;display:flex;min-height:0}
+
+/* 左侧工具栏 */
+.toolbar{
+  width:112px;flex:0 0 auto;background:#0b111a;border-right:1px solid var(--line);
+  padding:10px 8px 14px;display:flex;flex-direction:column;gap:7px;overflow-y:auto;
+}
+.tool-group-title{font-size:10.5px;color:#64748b;letter-spacing:.12em;padding-left:4px;margin-top:2px}
+.tool{
+  display:flex;flex-direction:column;align-items:center;gap:2px;
+  padding:8px 4px;border-radius:8px;border:1px solid transparent;
+  color:#c7d4e8;transition:background .12s,border-color .12s;
+}
+.tool .icon{font-size:19px;line-height:1.05}
+.tool .txt{font-size:11px}
+.tool:hover{background:#141d2b}
+.tool.active{background:#16233a;border-color:#2c4a77;color:#93c5fd}
+.tool.action{
+  background:linear-gradient(135deg,#1d4ed8,#0891b2);color:#fff;font-weight:600;
+  padding:10px 4px;margin-top:2px;box-shadow:0 4px 14px rgba(29,78,216,.28);
+}
+.tool.action:hover{filter:brightness(1.08)}
+.tool.action.active-ignore{background:#3a2a0c;color:#fcd34d;box-shadow:none}
+.tool.action:disabled{filter:grayscale(.7);box-shadow:none}
+.divider{height:1px;background:var(--line2);margin:5px 2px}
+.swatches{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;padding:0 2px}
+.swatch{width:100%;aspect-ratio:1;border-radius:5px;border:1px solid rgba(255,255,255,.16)}
+.swatch.active{outline:2px solid #93c5fd;outline-offset:1px}
+input[type=color]{
+  width:100%;height:28px;border:1px solid var(--line);border-radius:6px;
+  background:#0f1622;padding:2px;cursor:pointer;
+}
+.slider{width:100%}
+.size-row{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--muted);padding:0 2px}
+.undo-row{display:flex;gap:6px}
+.undo-row .tool{flex:1;padding:7px 2px}
+
+/* 画布舞台 */
+.stage{flex:1;display:flex;flex-direction:column;min-width:0;padding:8px 12px 0}
+.stage-head{
+  display:flex;align-items:center;gap:12px;padding:2px 4px 8px;
+  font-size:12px;color:var(--muted);flex:0 0 auto;
+}
+.stage-head .doc-name{color:#cbd5e1;font-weight:600;font-size:12.5px}
+.stage-head .tip{margin-left:auto;color:#7f93ad}
+.stage-head .tip b{color:#93c5fd;font-weight:600}
+.canvas-wrap{
+  flex:1;position:relative;min-height:0;border-radius:12px;
+  border:1px solid #172235;overflow:hidden;
+  background:
+    radial-gradient(1200px 600px at 50% 40%,#101929 0%,#0a0f18 70%),
+    #0a0f18;
+}
+.canvas-wrap::before{
+  content:"";position:absolute;inset:0;
+  background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),
+                   linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);
+  background-size:32px 32px;pointer-events:none;
+}
+#mainCanvas{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  background:#fff;border-radius:3px;box-shadow:0 20px 60px rgba(0,0,0,.6);
+  touch-action:none;cursor:crosshair;z-index:1;
+}
+#overlayCanvas{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  pointer-events:none;z-index:2;
+}
+.stage-foot{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:6px 4px;font-size:11px;color:#64748b;flex:0 0 auto;gap:10px;
+}
+.stage-foot .left{display:flex;gap:14px;align-items:center;min-width:0;overflow:hidden;white-space:nowrap}
+
+/* 右侧栏 */
+.sidebar{
+  width:412px;flex:0 0 auto;display:flex;flex-direction:column;
+  background:var(--panel2);border-left:1px solid var(--line);min-height:0;
+}
+.panel{display:flex;flex-direction:column;min-height:0}
+.layers-panel{height:37%;min-height:244px;border-bottom:1px solid var(--line)}
+.ai-panel{flex:1;min-height:0}
+.panel-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:9px 12px;flex:0 0 auto;border-bottom:1px solid #16202f;
+}
+.panel-head h2{font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:8px}
+.mock-tag{
+  font-size:9.5px;font-weight:700;letter-spacing:.08em;color:#fbbf24;
+  border:1px solid #7c5a16;background:#2a2110;border-radius:4px;padding:1px 5px;
+}
+.ai-status{font-size:11px;color:var(--muted)}
+
+/* 图层列表 */
+.layer-list{flex:1;overflow-y:auto;padding:6px 8px;min-height:0}
+.layer-row{
+  display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:8px;
+  border:1px solid transparent;cursor:pointer;user-select:none;
+}
+.layer-row:hover{background:#111a27}
+.layer-row.active{background:#132033;border-color:#294c7c}
+.layer-row .eye{
+  width:22px;height:22px;border-radius:5px;flex:0 0 auto;color:#8fa1ba;
+  font-size:12px;display:grid;place-items:center;
+}
+.layer-row .eye:hover{background:#1b2637;color:#cbd5e1}
+.layer-row .eye.off{opacity:.32}
+.layer-thumb{
+  width:48px;height:32px;border-radius:4px;flex:0 0 auto;
+  background:#0a0e15;border:1px solid #1e2a3c;
+}
+.layer-name{
+  flex:1;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.layer-row .badge{flex:0 0 auto}
+.badge{
+  font-size:9.5px;padding:1px 6px;border-radius:999px;border:1px solid;
+  white-space:nowrap;
+}
+.badge.ai{color:#fbbf24;border-color:#7c5a16;background:#2a2110}
+.badge.base{color:#93a4bd;border-color:#334155;background:#131a26}
+.badge.user{color:#93c5fd;border-color:#1e3a5f;background:#101c2e}
+.layer-controls{flex:0 0 auto;padding:7px 12px 10px;border-top:1px solid #16202f}
+.opacity-row{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-bottom:7px}
+.opacity-row input{flex:1}
+#layerOpacityVal{width:36px;text-align:right;color:#cbd5e1}
+.row{display:flex;gap:6px}
+
+/* AI 面板 */
+.ai-body{flex:1;overflow-y:auto;padding:10px 12px 14px;font-size:13px;min-height:0}
+.ai-intro{
+  background:#0d1520;border:1px dashed #223149;border-radius:9px;
+  padding:10px 12px;margin-bottom:10px;
+}
+.ai-intro ol{list-style:none;display:flex;flex-direction:column;gap:5px;color:var(--muted);font-size:12px}
+.ai-intro ol li{display:flex;gap:7px}
+.ai-intro ol li .n{
+  width:16px;height:16px;border-radius:50%;background:#1a2638;color:#93c5fd;
+  font-size:10px;display:grid;place-items:center;flex:0 0 auto;margin-top:1px;
+}
+.btn.big{width:100%;padding:11px;font-size:14px;border-radius:9px;margin-top:4px}
+.btn.ghost{background:#0f1622;border:1px solid var(--line);color:#cbd5e1}
+.btn.ghost:hover{background:#16202f}
+.switch{display:flex;gap:7px;align-items:center;font-size:11.5px;color:var(--muted);margin-top:9px;cursor:pointer;user-select:none}
+.switch input{accent-color:var(--accent)}
+.ai-note{font-size:11px;color:#5f7692;margin-top:10px;line-height:1.6}
+.ai-note b{color:#7d95b3;font-weight:600}
+
+/* 观察卡（三态视觉语言：形状 + 图标 + 文字，不依赖颜色） */
+.obs-card{
+  border:1px solid #263449;border-left:3px solid var(--observed);
+  border-radius:9px;padding:9px 10px 8px;margin-bottom:8px;background:#0f1622;
+  transition:border-color .15s,background .15s;
+}
+.obs-card[data-source=inferred]{
+  border-style:dashed;border-left-style:solid;border-left-color:var(--inferred);
+  background:linear-gradient(90deg,rgba(180,83,9,.08),rgba(15,22,34,1) 60%);
+}
+.obs-card[data-source=user-confirmed]{
+  border:2px solid #1e6f55;border-left:3px solid var(--confirmed);
+  background:linear-gradient(90deg,rgba(6,78,59,.16),rgba(15,22,34,1) 65%);
+}
+.obs-card[data-source=rejected]{opacity:.55;border:1px dashed #713136;border-left:3px solid var(--rejected)}
+.obs-top{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:5px}
+.src-badge{
+  display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;
+  border-radius:5px;padding:1px 6px;border:1px solid;
+}
+.src-badge.observed{color:#cbd5e1;border-color:#3b4a61;background:#141d2b}
+.src-badge.inferred{color:#fcd34d;border-color:#7c5a16;background:#241b0a}
+.src-badge.user-confirmed{color:#6ee7b7;border-color:#1e6f55;background:#0b2018}
+.src-badge.rejected{color:#fca5a5;border-color:#713136;background:#241012}
+.conf{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;color:var(--muted)}
+.conf .dots{letter-spacing:1px;font-size:8px;color:#4b6280}
+.conf .dots i{font-style:normal;color:var(--inferred)}
+.conf.low{color:#fcd34d}
+.obs-text{font-size:12.5px;line-height:1.62;color:#d8e2f0}
+.obs-card[data-source=rejected] .obs-text{text-decoration:line-through;text-decoration-color:#7f3b3b}
+.chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.chip{
+  font-size:10px;padding:1px 6px;border-radius:4px;
+  background:#0c1420;border:1px solid #223149;color:#93a9c4;
+}
+.card-actions{display:flex;gap:6px;margin-top:7px;align-items:center}
+.mini{
+  padding:3px 9px;border-radius:6px;font-size:11.5px;
+  border:1px solid #2a3a52;background:#111a28;color:#b9c9dc;
+}
+.mini:hover{background:#172336}
+.mini.ok{color:#6ee7b7;border-color:#1e6f55;background:#0b2018}
+.mini.ok:hover{background:#0f2a20}
+.mini.no{color:#fca5a5;border-color:#5b2323;background:#1e1113}
+.mini.no:hover{background:#2a1518}
+.mini:disabled{opacity:.5}
+.obs-state-line{font-size:10.5px;color:#64748b;margin-top:6px}
+
+/* 依据展开 */
+.evidence-box{
+  margin-top:7px;padding:7px 8px;border-radius:7px;background:#0a111b;
+  border:1px solid #1b2a3d;font-size:11px;color:#8fa6c2;line-height:1.65;
+}
+.evidence-box .ev-row{display:flex;gap:6px}
+.evidence-box .ev-k{color:#64748b;flex:0 0 auto}
+.obs-hint{font-size:10px;color:#5f7692;margin-left:auto}
+.src-legend{font-size:10.5px;color:#5f7692;margin:0 0 8px;line-height:1.6}
+
+/* 方向卡 */
+.section-title{
+  display:flex;align-items:baseline;gap:8px;margin:14px 0 8px;
+  font-size:12.5px;font-weight:600;color:#cbd5e1;
+}
+.section-title span{font-size:10.5px;font-weight:400;color:#5f7692}
+.dir-card{
+  border:1px solid #263449;border-radius:9px;padding:9px 10px;margin-bottom:8px;
+  background:#0f1622;cursor:pointer;position:relative;transition:border-color .12s,background .12s;
+}
+.dir-card:hover{border-color:#3b5b8a;background:#111c2b}
+.dir-card.active{border-color:#3b82f6;background:#101d31;box-shadow:0 0 0 1px rgba(59,130,246,.35)}
+.dir-card .dir-tag{font-size:10px;color:#7d95b3;font-weight:600;letter-spacing:.05em}
+.dir-card h3{font-size:13px;font-weight:600;margin-top:2px;color:#e2ecfa}
+.dir-card p{font-size:12px;color:#b3c2d6;line-height:1.6;margin-top:4px}
+.dir-card .why{
+  color:#7d95b3;font-size:11px;line-height:1.6;margin-top:6px;
+  border-top:1px dashed #1e2b3e;padding-top:6px;
+}
+.dir-card .check{
+  position:absolute;right:9px;top:9px;width:16px;height:16px;border-radius:50%;
+  border:1px solid #33465f;display:grid;place-items:center;font-size:10px;color:transparent;
+}
+.dir-card.active .check{border-color:#3b82f6;background:#3b82f6;color:#fff}
+
+/* 模拟方案卡 */
+.prop-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.prop-card{
+  border:1px solid #263449;border-radius:9px;overflow:hidden;background:#0f1622;
+  cursor:pointer;transition:border-color .12s;
+}
+.prop-card:hover{border-color:#3b82f6}
+.prop-card.active{border-color:#3b82f6;box-shadow:0 0 0 1px rgba(59,130,246,.4)}
+.prop-thumb{width:100%;height:92px;display:block;background:#0a1018}
+.prop-info{padding:6px 8px 7px}
+.prop-info .t{font-size:11.5px;font-weight:600;color:#dbeafe}
+.prop-info .s{font-size:10px;color:#64748b;margin-top:2px;line-height:1.45}
+.prop-badge{
+  display:inline-block;font-size:9px;color:#fbbf24;border:1px solid #7c5a16;
+  background:#2a2110;border-radius:4px;padding:0 4px;margin-bottom:3px;
+}
+.preview-bar{
+  margin-top:10px;padding:9px 10px;border:1px solid #1d4ed8;background:#0f1f38;
+  border-radius:9px;display:flex;flex-direction:column;gap:7px;
+}
+.preview-bar .pt{font-size:11.5px;color:#bfdbfe}
+.preview-bar .pr{display:flex;gap:6px}
+.preview-bar .btn{flex:1}
+
+/* 加载 / 进度 */
+.skeleton{
+  height:56px;border-radius:8px;margin-bottom:8px;
+  background:linear-gradient(90deg,#0f1826 25%,#16233a 50%,#0f1826 75%);
+  background-size:200% 100%;animation:shimmer 1.15s infinite;
+}
+@keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+.progress-wrap{margin:12px 0 4px}
+.progress-label{display:flex;justify-content:space-between;font-size:11px;color:#93a9c4;margin-bottom:5px}
+.progress{height:4px;background:#132033;border-radius:999px;overflow:hidden}
+.progress i{display:block;height:100%;width:34%;border-radius:999px;background:linear-gradient(90deg,#2563eb,#22d3ee);animation:indet 1.15s infinite}
+@keyframes indet{0%{transform:translateX(-110%)}100%{transform:translateX(320%)}}
+.gen-note{font-size:10.5px;color:#5f7692;margin-top:6px}
+
+/* 存证模式禁用态 */
+.ai-disabled{
+  border:1px dashed #5b4a1e;background:linear-gradient(180deg,#1a150a,#0f1622);
+  border-radius:10px;padding:14px;text-align:center;
+}
+.ai-disabled .shield{font-size:26px;color:#fbbf24}
+.ai-disabled h3{font-size:14px;margin:6px 0 5px;color:#fde68a}
+.ai-disabled p{font-size:12px;color:#a8915b;line-height:1.7}
+
+/* ===================== 状态栏 ===================== */
+.statusbar{
+  flex:0 0 auto;height:30px;display:flex;align-items:center;gap:16px;
+  padding:0 16px;font-size:11px;color:#5f7692;
+  background:#0a0f17;border-top:1px solid var(--line2);
+}
+.statusbar .right{margin-left:auto;display:flex;gap:16px;align-items:center}
+.statusbar .dotsep{width:3px;height:3px;border-radius:50%;background:#334155;display:inline-block;margin:0 7px;vertical-align:middle}
+
+/* ===================== 弹层 ===================== */
+.modal-mask{
+  position:fixed;inset:0;background:rgba(3,7,12,.74);
+  display:none;align-items:center;justify-content:center;z-index:60;
+  backdrop-filter:blur(3px);
+}
+.modal-mask.open{display:flex}
+.modal{
+  width:min(920px,92vw);max-height:88vh;background:#0f1622;
+  border:1px solid #2a3a52;border-radius:14px;display:flex;flex-direction:column;
+  box-shadow:0 30px 80px rgba(0,0,0,.7);overflow:hidden;
+}
+.modal-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:13px 18px;border-bottom:1px solid var(--line);flex:0 0 auto;
+}
+.modal-head h2{font-size:15px;font-weight:650;display:flex;align-items:center;gap:9px}
+.modal-head .sub{font-size:11px;color:var(--muted);margin-top:2px}
+.modal-body{padding:16px 18px;overflow-y:auto;font-size:13px}
+.modal-foot{
+  padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:9px;
+  justify-content:flex-end;flex:0 0 auto;background:#0c121c;
+}
+.close-x{
+  width:30px;height:30px;border-radius:8px;color:#8fa1ba;font-size:16px;
+  display:grid;place-items:center;border:1px solid transparent;
+}
+.close-x:hover{background:#16202f;border-color:#2a3a52;color:#e2ecfa}
+
+/* 档案 / 决策弹层 */
+.arch-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.arch-col h3{font-size:12.5px;color:#93a9c4;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.arch-col h3 .num{
+  font-size:10px;background:#1a2638;color:#93c5fd;border-radius:999px;padding:0 6px;
+}
+.arch-item{
+  border:1px solid #223149;border-radius:8px;padding:8px 10px;margin-bottom:7px;
+  background:#0c131d;font-size:12px;line-height:1.6;
+}
+.arch-item .meta{font-size:10.5px;color:#5f7692;margin-top:4px;display:flex;gap:8px;flex-wrap:wrap}
+.arch-empty{color:#5f7692;font-size:12px;border:1px dashed #223149;border-radius:8px;padding:16px;text-align:center}
+.kind-pill{font-size:10px;border-radius:4px;padding:0 5px;border:1px solid #334155;color:#93a9c4}
+.kind-pill.accept{color:#6ee7b7;border-color:#1e6f55}
+.kind-pill.reject{color:#fca5a5;border-color:#5b2323}
+.kind-pill.confirm{color:#6ee7b7;border-color:#1e6f55}
+
+/* 证据包弹层 */
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-bottom:14px}
+.stat{background:#0b111b;border:1px solid #223149;border-radius:9px;padding:9px 10px}
+.stat .k{font-size:10.5px;color:#64748b}
+.stat .v{font-size:14px;font-weight:650;margin-top:3px;color:#e2ecfa}
+.stat .v.good{color:#6ee7b7}
+.stat .v.warn{color:#fcd34d}
+.stat .v.bad{color:#fca5a5}
+.ev-block{margin-bottom:14px}
+.ev-block h3{font-size:12.5px;color:#93a9c4;margin-bottom:7px;display:flex;align-items:center;gap:8px}
+.ev-block h3 .hint{font-size:10.5px;color:#5f7692;font-weight:400}
+.manifest-pre{
+  background:#070b11;border:1px solid #1b2a3d;border-radius:9px;
+  padding:11px 12px;font-family:"Cascadia Code",Consolas,"Courier New",monospace;
+  font-size:11px;line-height:1.65;color:#9db4d0;max-height:250px;overflow:auto;
+  white-space:pre-wrap;word-break:break-all;
+}
+.statement{
+  border-left:3px solid #2563eb;background:#0c1728;border-radius:0 8px 8px 0;
+  padding:10px 12px;font-size:11.5px;color:#a9bfdc;line-height:1.7;
+}
+.statement.warn{border-left-color:#b45309;background:#1a1409;color:#d6bf8a}
+.hash-row{display:flex;flex-direction:column;gap:5px;font-size:11px;color:#8fa6c2}
+.hash-row .h{
+  font-family:Consolas,monospace;color:#7dd3fc;word-break:break-all;font-size:10.5px;
+}
+.chk{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:#b3c2d6;margin:5px 0}
+.chk input{margin-top:3px;accent-color:var(--accent)}
+
+/* toast */
+#toastWrap{
+  position:fixed;left:50%;bottom:44px;transform:translateX(-50%);
+  display:flex;flex-direction:column;gap:7px;z-index:90;pointer-events:none;align-items:center;
+}
+.toast{
+  background:#101c2e;border:1px solid #2b4a75;color:#dbeafe;
+  padding:8px 16px;border-radius:999px;font-size:12.5px;
+  box-shadow:0 10px 28px rgba(0,0,0,.55);animation:toast-in .16s ease;
+  max-width:80vw;text-align:center;
+}
+.toast.warn{border-color:#7c5a16;color:#fde68a;background:#221a0b}
+.toast.ok{border-color:#1e6f55;color:#a7f3d0;background:#0b2018}
+@keyframes toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+/* 画布上的提示药丸（用于预览提示） */
+.canvas-toast{
+  position:absolute;left:50%;bottom:16px;transform:translateX(-50%);
+  background:rgba(10,17,27,.92);border:1px solid #2b4a75;color:#bfdbfe;
+  font-size:12px;padding:7px 14px;border-radius:999px;z-index:5;
+  pointer-events:none;white-space:nowrap;
+}
+
+/* ===================== 轻量高级感：玻璃质感 / 内联图标 / 动效 ===================== */
+.btn{display:inline-flex;align-items:center;gap:7px}
+.btn-ico{display:inline-flex;width:15px;height:15px;align-items:center;justify-content:center;opacity:.9}
+.btn-ico svg{width:15px;height:15px}
+.tool .icon{display:inline-flex;align-items:center;justify-content:center}
+.tool .icon svg{width:20px;height:20px}
+.src-badge svg{width:11px;height:11px;margin-right:1px;flex:0 0 auto}
+.layer-row .eye svg{width:14px;height:14px}
+.panel{background:linear-gradient(180deg,rgba(20,28,42,.72),rgba(11,17,26,.94))}
+.panel-head{background:linear-gradient(180deg,rgba(255,255,255,.022),transparent)}
+.obs-card,.dir-card,.prop-card{box-shadow:inset 0 1px 0 rgba(255,255,255,.035),0 2px 10px rgba(0,0,0,.22)}
+.obs-card{background:linear-gradient(180deg,rgba(22,32,47,.92),rgba(13,20,31,.96))}
+.obs-card[data-source=inferred]{background:linear-gradient(100deg,rgba(180,83,9,.12),rgba(16,24,36,.97) 62%)}
+.obs-card[data-source=user-confirmed]{background:linear-gradient(100deg,rgba(6,78,59,.20),rgba(16,24,36,.97) 65%)}
+.dir-card,.prop-card{background:linear-gradient(180deg,rgba(21,30,44,.9),rgba(13,20,31,.96))}
+.ai-body{scroll-behavior:smooth}
+.layers-panel.collapsed{height:48px;min-height:48px;flex:0 0 auto}
+.layers-panel.collapsed .layer-list,.layers-panel.collapsed .layer-controls,.layers-panel.collapsed #btnAddLayer{display:none}
+.obs-card,.dir-card{animation:card-in .26s ease both}
+.obs-card:nth-child(2){animation-delay:.045s}
+.obs-card:nth-child(3){animation-delay:.09s}
+.obs-card:nth-child(4){animation-delay:.135s}
+.dir-card:nth-child(2){animation-delay:.06s}
+@keyframes card-in{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){
+  .obs-card,.dir-card,.prop-card{animation:none!important}
+  .skeleton,.progress i{animation:none!important}
+  .progress i{width:100%;opacity:.4}
+  .ai-body{scroll-behavior:auto}
+}
+</style>
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ 顶栏 ============ -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="mark">◈</div>
+      <div>
+        <div class="title">墨证 InkProof <span class="ver">H11 黑客松 Demo · v0.1</span></div>
+        <div class="sub">私人视觉记忆 · 卡住时刻协作 · 创作过程证据链</div>
+      </div>
+    </div>
+    <div class="mock-pill" title="所有 AI 结果均为预置 Mock 数据 + canvas 滤镜，未调用任何真实模型，无网络请求">
+      <span class="dot"></span>模拟演示 · AI 结果为预置 Mock
+    </div>
+    <div class="top-actions">
+      <button class="btn" id="btnLoadExample" title="用代码生成一张示例作品（含 3 个图层），便于直接演示"><span class="btn-ico" data-icon="image"></span>加载示例作品</button>
+      <button class="btn" id="btnImportImage" title="导入本地图片作为新图层"><span class="btn-ico" data-icon="image-plus"></span>导入图片</button>
+      <button class="btn" id="btnArchive" title="查看 AI 档案观察与你的确认/否决记录（L4/L5）"><span class="btn-ico" data-icon="archive"></span>档案记录 <span id="decisionCount" style="color:#93c5fd">0</span></button>
+      <button class="btn primary" id="btnEvidence" title="导出创作过程证据包（JSON）与当前画布 PNG"><span class="btn-ico" data-icon="download"></span>导出证据包</button>
+      <div class="mode-switch" id="modeSwitch" title="存证模式：禁用 AI，证据包显示零生成">
+        <button class="mode-opt active" data-mode="collab">协作模式</button>
+        <button class="mode-opt" data-mode="evidence">存证模式</button>
+      </div>
+    </div>
+    <input type="file" id="fileInput" accept="image/*" style="display:none">
+  </header>
+
+  <!-- ============ 工作区 ============ -->
+  <div class="workspace">
+
+    <!-- 左侧工具栏 -->
+    <aside class="toolbar">
+      <div class="tool-group-title">工具</div>
+      <button class="tool active" data-tool="brush-hard" title="硬笔（快捷键 B）">
+        <span class="icon" data-icon="pen"></span><span class="txt">硬笔</span>
+      </button>
+      <button class="tool" data-tool="brush-soft" title="软笔（快捷键 N）">
+        <span class="icon" data-icon="brush"></span><span class="txt">软笔</span>
+      </button>
+      <button class="tool" data-tool="eraser" title="橡皮（快捷键 E）">
+        <span class="icon" data-icon="eraser"></span><span class="txt">橡皮</span>
+      </button>
+      <button class="tool" data-tool="select" title="框选指认区域（快捷键 R）">
+        <span class="icon" data-icon="select"></span><span class="txt">框选</span>
+      </button>
+      <button class="tool" data-tool="move" title="移动选中的 AI 图层（快捷键 M）">
+        <span class="icon" data-icon="move"></span><span class="txt">移动</span>
+      </button>
+
+      <div class="divider"></div>
+      <div class="tool-group-title">颜色</div>
+      <div class="swatches" id="swatches"></div>
+      <input type="color" id="colorInput" value="#e8d7a8" title="自定义颜色">
+
+      <div class="divider"></div>
+      <div class="size-row"><span>粗细</span><span id="sizeVal">18 px</span></div>
+      <input type="range" class="slider" id="sizeRange" min="2" max="80" value="18">
+
+      <div class="divider"></div>
+      <div class="undo-row">
+        <button class="tool" id="btnUndo" title="撤销（Ctrl+Z）"><span class="icon" data-icon="undo"></span><span class="txt">撤销</span></button>
+        <button class="tool" id="btnRedo" title="重做（Ctrl+Shift+Z）"><span class="icon" data-icon="redo"></span><span class="txt">重做</span></button>
+      </div>
+
+      <div class="divider"></div>
+      <button class="tool action" id="btnAskAi" title="框选区域后让 AI 看看（快捷键 K）">
+        <span class="icon" data-icon="sparkles"></span><span class="txt">让 AI<br>看看</span>
+      </button>
+      <button class="tool" id="btnIgnoreArchive" title="本次请求不参考你的档案（D4 自检）">
+        <span class="icon" data-icon="archive-off"></span><span class="txt">不参考<br>档案</span>
+      </button>
+    </aside>
+
+    <!-- 画布舞台 -->
+    <section class="stage">
+      <div class="stage-head">
+        <span class="doc-name">作品《雾中山谷》</span>
+        <span id="docSize">1200 × 800</span>
+        <span class="tip" id="stageTip">提示：用 <b>框选</b> 圈出卡住的地方，再点 <b>让 AI 看看</b>（K）</span>
+      </div>
+      <div class="canvas-wrap" id="canvasWrap">
+        <canvas id="mainCanvas" width="1200" height="800"></canvas>
+        <canvas id="overlayCanvas" width="1200" height="800"></canvas>
+        <div class="canvas-toast" id="canvasToast" style="display:none"></div>
+      </div>
+      <div class="stage-foot">
+        <div class="left">
+          <span id="statusHint">就绪</span>
+        </div>
+        <div class="left">
+          <span id="statusZoom">100%</span>
+          <span id="statusLayers">图层 0</span>
+          <span id="statusStrokes">笔触 0</span>
+          <span id="statusAiState">AI 待命</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 右侧栏：图层 + AI 面板 -->
+    <aside class="sidebar">
+      <section class="panel layers-panel">
+        <div class="panel-head">
+          <h2>图层</h2>
+          <div style="display:flex;gap:6px;align-items:center">
+            <button class="btn tiny" id="btnAddLayer">＋ 新建图层</button>
+            <button class="btn tiny" id="btnCollapseLayers" title="折叠 / 展开图层面板">⌃</button>
+          </div>
+        </div>
+        <div class="layer-list" id="layerList"></div>
+        <div class="layer-controls">
+          <div class="opacity-row">
+            <span>不透明度</span>
+            <input type="range" id="layerOpacity" min="0" max="100" value="100">
+            <span id="layerOpacityVal">100%</span>
+          </div>
+          <div class="row">
+            <button class="btn tiny" id="btnLayerUp">↑ 上移</button>
+            <button class="btn tiny" id="btnLayerDown">↓ 下移</button>
+            <button class="btn tiny danger" id="btnLayerDelete">删除图层</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel ai-panel">
+        <div class="panel-head">
+          <h2>让 AI 看看 <span class="mock-tag">MOCK</span></h2>
+          <span class="ai-status" id="aiStatus">待指认</span>
+        </div>
+        <div class="ai-body" id="aiBody"></div>
+      </section>
+    </aside>
+  </div>
+
+  <!-- ============ 状态栏 ============ -->
+  <footer class="statusbar">
+    <span id="statusModeText">协作模式 · AI 可参与局部方案</span>
+    <span class="right">
+      <span id="statusEvents">事件 0</span>
+      <span id="statusHash">哈希准备中…</span>
+      <span id="statusMock">全部离线 · 无网络请求</span>
+    </span>
+  </footer>
+</div>
+
+<!-- ============ 档案记录弹层 ============ -->
+<div class="modal-mask" id="archiveModal">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <h2>档案记录 <span class="mock-tag">L4 / L5</span></h2>
+        <div class="sub">AI 写观察（可确认/否决），你的每个决定都会写回决策记录，影响后续生成</div>
+      </div>
+      <button class="close-x" data-close="archiveModal">✕</button>
+    </div>
+    <div class="modal-body" id="archiveBody"></div>
+    <div class="modal-foot">
+      <button class="btn" data-close="archiveModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 证据包弹层 ============ -->
+<div class="modal-mask" id="evidenceModal">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <h2>导出证据包 <span class="mock-tag">MOCK · 演示用</span></h2>
+        <div class="sub">时间线事件 · AI 事件清单 · 图层/画布 SHA-256 · manifest · zero_generation 标记</div>
+      </div>
+      <button class="close-x" data-close="evidenceModal">✕</button>
+    </div>
+    <div class="modal-body" id="evidenceBody"></div>
+    <div class="modal-foot">
+      <button class="btn" id="btnDownloadJson">下载证据包 JSON</button>
+      <button class="btn" id="btnDownloadPng">下载当前画布 PNG</button>
+      <button class="btn primary" id="btnExportBoth">一键导出（JSON + PNG）</button>
+    </div>
+  </div>
+</div>
+
+<div id="toastWrap"></div>
+
+<script>
+'use strict';
+/* =========================================================================
+   PART C · 基础层：常量 / 状态 / 工具 / 哈希 / 事件记录 / 图层 / 渲染
+   ========================================================================= */
+
+const DOC_W = 1200, DOC_H = 800;
+const APP_VERSION = 'demo-0.1';
+const $ = (id) => document.getElementById(id);
+
+/* ---------- Mock 数据集中地：以后接真模型时，优先替换这里 ---------- */
+const MOCK = {
+  version: 'mock-0.1',
+  note: '本 Demo 所有 AI 结果均为预置数据或 canvas 滤镜模拟，未调用任何模型、无网络请求。',
+  models: {
+    vlm:   { provider: 'mock', name: 'mock-vlm-0.1',  note: '预置观察模板（模拟多模态反解）' },
+    image: { provider: 'mock', name: 'mock-image-edit-0.1', note: 'canvas 滤镜/色块模拟（模拟局部重绘）' }
+  },
+  latency: { observe: 1450, generate: 1000 },
+  // 观察模板：anchor 指示在画布上如何定位高亮锚点
+  observations: [
+    {
+      key: 'obs-1', source: 'observed', confidence: 0.92, anchorType: 'selection',
+      text: '选区平均色 {avgHex}（偏{colorTemp}），明度{brightDesc}；与画面右上方光源方向一致。',
+      evidence: [
+        { k: 'L2 · 区域', v: '你框选的区域（bbox {bbox}）' },
+        { k: 'L1 · 色板', v: '主色 {avgHex} / 冷青系' }
+      ]
+    },
+    {
+      key: 'obs-2', source: 'inferred', confidence: 0.71, anchorType: 'sub',
+      sub: { x: 0.42, y: 0.28, w: 0.56, h: 0.64 },
+      text: '选区右下缘的笔触更干、更碎，像是故意留下的收尾；若并非有意，这条边界会显得「断」。',
+      evidence: [
+        { k: 'L2 · 云层下缘', v: 'L2-a7-001 · importance 0.8' },
+        { k: 'L4 · 观察', v: 'L4-a7-014 笔触与整体精细度反差' }
+      ]
+    },
+    {
+      key: 'obs-3', source: 'user-confirmed', confidence: 0.95, anchorType: 'fixed',
+      fixed: { x: 0.66, y: 0.06, w: 0.28, h: 0.34 },
+      text: '你此前确认过：主光来自右上，夜空是冷青底。这张画沿用了同一条偏好。',
+      evidence: [
+        { k: 'L1 · 光线', v: 'right-top（你确认 · 3 天前）' },
+        { k: 'L1 · 色板', v: '冷青 #2F6F8F' }
+      ]
+    },
+    {
+      key: 'obs-4', source: 'inferred', confidence: 0.47, anchorType: 'sub',
+      sub: { x: 0.04, y: 0.54, w: 0.52, h: 0.42 },
+      text: '左下暗部到雾带的过渡可能太齐了——不过我没把握，建议你先自己看一眼。',
+      evidence: [
+        { k: 'L2 · 雾带边界', v: '置信较低，建议你确认' },
+        { k: 'L4 · 待确认', v: '可能想表达「安静」' }
+      ]
+    }
+  ],
+  directions: [
+    {
+      key: 'dir-1', short: '边界清晰',
+      title: '让雾带边界更清楚',
+      desc: '在选区下缘加一道 6–10px 的提亮过渡，保留下方雾气的软边。',
+      why: '依据：观察 #2（笔触更干）+ L2 区域「云层下缘」；上次你在《海边》里也选了更清楚的边界。',
+      effect: '预计改动：选区约 40%'
+    },
+    {
+      key: 'dir-2', short: '冷暖分离',
+      title: '拉开冷暖，压暗近景',
+      desc: '远景雾气压成冷灰，近处山体再加深一档，让画面有前后两级。',
+      why: '依据：观察 #1（平均色 {avgHex}）+ L1 色板冷青；与你确认过的「夜雾」母题一致。',
+      effect: '预计改动：选区约 55%'
+    }
+  ],
+  // 每个方向 → 2 个模拟方案（canvas 滤镜 + 色块）
+  directionPlans: {
+    'dir-1': [
+      { key: 'p1a', title: '方案 A · 提亮边界', filter: 'contrast(1.22) saturate(1.14) brightness(1.07) hue-rotate(-3deg)', overlay: 'warm',  note: '依据：观察 #2 + L2 云层下缘' },
+      { key: 'p1b', title: '方案 A2 · 柔化过渡', filter: 'contrast(1.10) saturate(0.96) brightness(1.10)',            overlay: 'mist',  note: '依据：观察 #2 + 雾带区域', lowConfidence: true }
+    ],
+    'dir-2': [
+      { key: 'p2a', title: '方案 B · 冷暖分离', filter: 'saturate(1.34) contrast(1.10) brightness(1.02) hue-rotate(9deg)', overlay: 'cool',     note: '依据：观察 #1 + L1 色板' },
+      { key: 'p2b', title: '方案 B2 · 压暗近景', filter: 'saturate(0.92) contrast(1.20) brightness(0.90) hue-rotate(-6deg)', overlay: 'vignette', note: '依据：观察 #1 + 冷暖两级' }
+    ]
+  }
+};
+
+/* ---------- DOM 引用 ---------- */
+const dom = {
+  mainCanvas: $('mainCanvas'),
+  overlayCanvas: $('overlayCanvas'),
+  canvasWrap: $('canvasWrap'),
+  canvasToast: $('canvasToast'),
+  layerList: $('layerList'),
+  layerOpacity: $('layerOpacity'),
+  layerOpacityVal: $('layerOpacityVal'),
+  aiBody: $('aiBody'),
+  aiStatus: $('aiStatus'),
+  swatches: $('swatches'),
+  colorInput: $('colorInput'),
+  sizeRange: $('sizeRange'),
+  sizeVal: $('sizeVal'),
+  fileInput: $('fileInput'),
+  archiveBody: $('archiveBody'),
+  archiveModal: $('archiveModal'),
+  evidenceModal: $('evidenceModal'),
+  evidenceBody: $('evidenceBody'),
+  toastWrap: $('toastWrap')
+};
+const mainCtx = dom.mainCanvas.getContext('2d');
+const overlayCtx = dom.overlayCanvas.getContext('2d');
+const scratch = document.createElement('canvas');
+scratch.width = DOC_W; scratch.height = DOC_H;
+const scratchCtx = scratch.getContext('2d');
+
+/* ---------- 全局状态 ---------- */
+const state = {
+  mode: 'collab',            // 'collab' | 'evidence'
+  modeStartedAt: nowIso(),
+  layers: [],                // 自下而上
+  activeLayerId: null,
+  tool: 'brush-hard',
+  color: '#e8d7a8',
+  size: 18,
+  selection: null,           // {x,y,w,h} 文档坐标；框选指认区域
+  aiReview: null,            // 本次「让 AI 看看」结果
+  selectedDirectionId: null,
+  proposals: [],             // 当前方向的模拟方案
+  previewProposalId: null,   // 画布预览中的方案
+  observations: [],          // 展示中的观察（含确认/否决状态）
+  decisions: [],             // L5 决策记录
+  events: [],                // 时间线事件（L6 最小集）
+  aiEvents: [],              // AI 事件清单（不可隐藏）
+  seq: 0,
+  strokeCount: 0,
+  hashingBackend: '检测中',
+  hashAvailable: false,
+  ignoreArchive: false,      // 本次不参考档案（D4 自检）
+  aiBusy: false,
+  exampleLoaded: false,
+  highlightObsId: null,      // 当前高亮的观察锚点
+  hoverObsId: null,
+  stroke: null,              // 当前笔触
+  drag: null,                // 当前拖动（框选 / 移动图层）
+  undoStack: [],
+  redoStack: []
+};
+
+/* ---------- 通用工具 ---------- */
+let _uid = 0;
+function uid(prefix) { _uid += 1; return `${prefix}-${Date.now().toString(36)}-${_uid}`; }
+function nowIso() { return new Date().toISOString(); }
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function fmtTime(d) {
+  const x = d instanceof Date ? d : new Date(d);
+  return `${String(x.getHours()).padStart(2,'0')}:${String(x.getMinutes()).padStart(2,'0')}:${String(x.getSeconds()).padStart(2,'0')}`;
+}
+function fmtDateTime(d) {
+  const x = d instanceof Date ? d : new Date(d);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${x.getFullYear()}-${p(x.getMonth()+1)}-${p(x.getDate())} ${p(x.getHours())}:${p(x.getMinutes())}`;
+}
+function fileStamp() {
+  const x = new Date(); const p = (n) => String(n).padStart(2, '0');
+  return `${x.getFullYear()}${p(x.getMonth()+1)}${p(x.getDate())}_${p(x.getHours())}${p(x.getMinutes())}`;
+}
+function toast(msg, type = '', ms = 2800) {
+  const el = document.createElement('div');
+  el.className = 'toast ' + (type || '');
+  el.textContent = msg;
+  dom.toastWrap.append(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .25s'; }, ms - 260);
+  setTimeout(() => el.remove(), ms);
+}
+function showCanvasToast(msg, ms = 3200) {
+  dom.canvasToast.textContent = msg;
+  dom.canvasToast.style.display = 'block';
+  clearTimeout(showCanvasToast._t);
+  showCanvasToast._t = setTimeout(() => { dom.canvasToast.style.display = 'none'; }, ms);
+}
+function setStatusHint(text) { $('statusHint').textContent = text; }
+
+/* ---------- 哈希（WebCrypto SHA-256，不可用时降级） ---------- */
+const HASH = { algorithm: 'SHA-256', backend: '检测中', available: false };
+
+async function detectHashBackend() {
+  try {
+    if (window.crypto && crypto.subtle && typeof crypto.subtle.digest === 'function') {
+      await crypto.subtle.digest('SHA-256', new Uint8Array(1).buffer);
+      HASH.available = true;
+      HASH.backend = 'WebCrypto SHA-256';
+    }
+  } catch (e) {
+    HASH.available = false;
+  }
+  if (!HASH.available) {
+    HASH.algorithm = 'FNV-1a-64（降级）';
+    HASH.backend = '降级哈希（WebCrypto 不可用）';
+  }
+  state.hashAvailable = HASH.available;
+  state.hashingBackend = HASH.backend;
+  $('statusHash').textContent = HASH.available ? '哈希：SHA-256 (WebCrypto)' : '哈希：降级 FNV-1a-64';
+}
+
+// 降级哈希：对字节做双路 FNV-1a，输出 16 位十六进制（仅用于演示，不等价于 SHA-256）
+function fallbackHashHex(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let h1 = 0x811c9dc5 >>> 0;
+  let h2 = 0xcbf29ce4 >>> 0;
+  for (let i = 0; i < bytes.length; i++) {
+    h1 ^= bytes[i];
+    h1 = Math.imul(h1, 0x01000193) >>> 0;
+    h2 = (h2 + bytes[i] + ((h2 << 1) >>> 0)) >>> 0;
+    h2 = Math.imul(h2 ^ (h2 >>> 13), 0x5bd1e995) >>> 0;
+  }
+  return h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0');
+}
+
+async function hashBytes(buffer) {
+  if (HASH.available) {
+    try {
+      const digest = await crypto.subtle.digest('SHA-256', buffer);
+      return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch (e) { /* 落到降级 */ }
+  }
+  return fallbackHashHex(buffer);
+}
+async function hashText(text) {
+  return hashBytes(new TextEncoder().encode(text).buffer);
+}
+function canvasToBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    try {
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('toBlob 返回空')), 'image/png');
+    } catch (e) { reject(e); }
+  });
+}
+async function canvasToArrayBuffer(canvas) {
+  const blob = await canvasToBlob(canvas);
+  return blob.arrayBuffer();
+}
+function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1600);
+}
+async function downloadCanvasPng(filename) {
+  const blob = await canvasToBlob(dom.mainCanvas);
+  downloadBlob(filename, blob);
+}
+
+/* ---------- 事件记录（L6 最小集） ---------- */
+function logEvent(kind, detail = {}, extra = {}) {
+  state.seq += 1;
+  const ev = { seq: state.seq, ts: nowIso(), kind, mode: state.mode, ...extra, detail };
+  state.events.push(ev);
+  updateStatusBar();
+  return ev;
+}
+function logAiEvent(ev) {
+  const rec = {
+    id: `L6-${state.aiEvents.length + 1}`.padStart(3, '0'),
+    ts: nowIso(), mode: state.mode, ...ev
+  };
+  rec.id = 'L6-' + String(state.aiEvents.length + 1).padStart(3, '0');
+  state.aiEvents.push(rec);
+  updateStatusBar();
+  return rec;
+}
+
+/* ---------- 图层模型 ---------- */
+function makeLayer(name, kind = 'user', opts = {}) {
+  const canvas = document.createElement('canvas');
+  canvas.width = DOC_W; canvas.height = DOC_H;
+  return {
+    id: uid('layer'),
+    name,
+    kind,                       // 'base' | 'user' | 'ai'
+    canvas,
+    ctx: canvas.getContext('2d'),
+    visible: true,
+    opacity: 1,
+    offset: { x: 0, y: 0 },
+    bbox: opts.bbox || null,    // AI 层内容范围（用于移动/命中）
+    aiMeta: opts.aiMeta || null,
+    created_at: nowIso()
+  };
+}
+function activeLayer() {
+  return state.layers.find(l => l.id === state.activeLayerId) || null;
+}
+function findLayer(id) { return state.layers.find(l => l.id === id) || null; }
+
+function addLayer(layer, { select = true, record = true } = {}) {
+  state.layers.push(layer);
+  if (select) state.activeLayerId = layer.id;
+  if (record) logEvent('layer_added', { layer_id: layer.id, name: layer.name, kind: layer.kind });
+  renderAll();
+  return layer;
+}
+
+/* ---------- 渲染 ---------- */
+function renderComposite(targetCtx) {
+  targetCtx.clearRect(0, 0, DOC_W, DOC_H);
+  for (const layer of state.layers) {
+    if (!layer.visible || layer.opacity <= 0) continue;
+    targetCtx.globalAlpha = layer.opacity;
+    targetCtx.drawImage(layer.canvas, layer.offset.x, layer.offset.y);
+  }
+  targetCtx.globalAlpha = 1;
+}
+function renderCanvas() { renderComposite(mainCtx); }
+
+function drawLayerThumb(thumb, layer) {
+  const ctx = thumb.getContext('2d');
+  ctx.clearRect(0, 0, thumb.width, thumb.height);
+  ctx.fillStyle = '#10161f';
+  ctx.fillRect(0, 0, thumb.width, thumb.height);
+  const s = Math.min(thumb.width / DOC_W, thumb.height / DOC_H);
+  const w = DOC_W * s, h = DOC_H * s;
+  ctx.save();
+  ctx.beginPath(); ctx.rect((thumb.width - w) / 2, (thumb.height - h) / 2, w, h); ctx.clip();
+  ctx.globalAlpha = layer.visible ? layer.opacity : 0.18;
+  ctx.drawImage(layer.canvas, (thumb.width - w) / 2 + layer.offset.x * s, (thumb.height - h) / 2 + layer.offset.y * s, w, h);
+  ctx.restore();
+}
+
+function renderLayerList() {
+  dom.layerList.innerHTML = '';
+  const ordered = [...state.layers].reverse();
+  for (const layer of ordered) {
+    const row = document.createElement('div');
+    row.className = 'layer-row' + (layer.id === state.activeLayerId ? ' active' : '');
+    row.dataset.id = layer.id;
+
+    const eye = document.createElement('button');
+    eye.className = 'eye' + (layer.visible ? '' : ' off');
+    eye.innerHTML = layer.visible ? ICON_SVG.eye : ICON_SVG['eye-off'];
+    eye.title = layer.visible ? '隐藏图层' : '显示图层';
+    eye.addEventListener('click', (e) => { e.stopPropagation(); toggleLayerVisible(layer.id); });
+
+    const thumb = document.createElement('canvas');
+    thumb.className = 'layer-thumb';
+    thumb.width = 96; thumb.height = 64;
+    drawLayerThumb(thumb, layer);
+
+    const name = document.createElement('div');
+    name.className = 'layer-name';
+    name.textContent = layer.name;
+    name.title = layer.name;
+
+    const badge = document.createElement('span');
+    badge.className = 'badge ' + (layer.kind === 'ai' ? 'ai' : (layer.kind === 'base' ? 'base' : 'user'));
+    badge.textContent = layer.kind === 'ai' ? 'AI' : (layer.kind === 'base' ? '底图' : '图层');
+
+    row.append(eye, thumb, name, badge);
+    row.addEventListener('click', () => selectLayer(layer.id));
+    dom.layerList.append(row);
+  }
+  syncLayerControls();
+}
+
+function syncLayerControls() {
+  const layer = activeLayer();
+  const has = !!layer;
+  $('layerOpacity').disabled = !has;
+  $('btnLayerUp').disabled = !has;
+  $('btnLayerDown').disabled = !has;
+  $('btnLayerDelete').disabled = !has || state.layers.length <= 1;
+  $('layerOpacity').value = has ? Math.round(layer.opacity * 100) : 100;
+  dom.layerOpacityVal.textContent = (has ? Math.round(layer.opacity * 100) : 100) + '%';
+}
+
+function updateStatusBar() {
+  $('statusLayers').textContent = '图层 ' + state.layers.length;
+  $('statusStrokes').textContent = '笔触 ' + state.strokeCount;
+  $('statusEvents').textContent = '事件 ' + state.events.length;
+  $('statusZoom').textContent = $('statusZoom').textContent; // 由 layoutCanvas 维护
+  const aiCount = state.aiEvents.length;
+  $('statusAiState').textContent = state.mode === 'evidence'
+    ? 'AI 已关闭（存证模式）'
+    : (state.aiBusy ? 'AI 正在看（模拟）' : `AI 事件 ${aiCount}`);
+  $('decisionCount').textContent = state.decisions.length;
+  $('aiStatus').textContent = state.aiBusy ? '模拟分析中…' : (state.aiReview ? '已返回（模拟）' : (state.mode === 'evidence' ? '存证模式 · 已禁用' : '待指认'));
+  updateUndoButtons();
+}
+
+function updateUndoButtons() {
+  $('btnUndo').disabled = state.undoStack.length === 0;
+  $('btnRedo').disabled = state.redoStack.length === 0;
+}
+
+function renderAll() {
+  renderCanvas();
+  renderLayerList();
+  renderOverlay();
+  updateStatusBar();
+}
+
+/* ---------- 撤销 / 重做（两层：像素交换 + 结构性动作） ---------- */
+function pushHistory(entry) {
+  state.undoStack.push(entry);
+  if (state.undoStack.length > 60) state.undoStack.shift();
+  state.redoStack.length = 0;
+  updateUndoButtons();
+}
+function undoAction() {
+  const entry = state.undoStack.pop();
+  if (!entry) return;
+  try { entry.undo(); } catch (e) { console.warn('undo failed', e); }
+  state.redoStack.push(entry);
+  renderAll();
+  updateUndoButtons();
+}
+function redoAction() {
+  const entry = state.redoStack.pop();
+  if (!entry) return;
+  try { entry.redo(); } catch (e) { console.warn('redo failed', e); }
+  state.undoStack.push(entry);
+  renderAll();
+  updateUndoButtons();
+}
+// 像素级：记录矩形区域的 before 数据，撤销时与当前互换（LIFO 安全）
+function makePixelHistoryEntry(layerId, rect, beforeImageData, label) {
+  return {
+    label: label || '绘制',
+    undo() {
+      const layer = findLayer(layerId);
+      if (!layer) return;
+      const cur = layer.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
+      layer.ctx.putImageData(beforeImageData, rect.x, rect.y);
+      beforeImageData = cur;
+    },
+    redo() { this.undo(); }
+  };
+}
+// 结构级：闭包 undo/redo
+function makeActionHistory(undoFn, redoFn, label) {
+  return { label: label || '操作', undo: undoFn, redo: redoFn };
+}
+
+/* ---------- 画布适配（保持 3:2 并等比缩放） ---------- */
+function layoutCanvas() {
+  const wrap = dom.canvasWrap;
+  if (!wrap) return;
+  const pad = 22;
+  const availW = Math.max(160, wrap.clientWidth - pad * 2);
+  const availH = Math.max(120, wrap.clientHeight - pad * 2);
+  const scale = Math.max(0.1, Math.min(availW / DOC_W, availH / DOC_H));
+  const cssW = Math.round(DOC_W * scale);
+  const cssH = Math.round(DOC_H * scale);
+  for (const c of [dom.mainCanvas, dom.overlayCanvas]) {
+    c.style.width = cssW + 'px';
+    c.style.height = cssH + 'px';
+  }
+  $('statusZoom').textContent = Math.round(scale * 100) + '%';
+}
+function pointerPos(e) {
+  const r = dom.mainCanvas.getBoundingClientRect();
+  return {
+    x: clamp((e.clientX - r.left) / r.width * DOC_W, 0, DOC_W),
+    y: clamp((e.clientY - r.top) / r.height * DOC_H, 0, DOC_H)
+  };
+}
+/* =========================================================================
+   PART D · 画布交互：笔刷 / 橡皮 / 框选指认 / 移动 AI 图层 / 覆盖层 / 图层操作
+   ========================================================================= */
+
+function hexToRgba(hex, alpha) {
+  let h = String(hex || '#ffffff').replace('#', '').trim();
+  if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  const n = parseInt(h, 16) || 0xffffff;
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
+
+/* ---------- 笔刷绘制 ---------- */
+function stampHard(ctx, p, color, size) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, Math.max(0.6, size / 2), 0, Math.PI * 2);
+  ctx.fill();
+}
+function stampSoft(ctx, p, color, size) {
+  const r = Math.max(2, size / 2);
+  const g = ctx.createRadialGradient(p.x, p.y, Math.max(0.5, r * 0.12), p.x, p.y, r);
+  g.addColorStop(0, hexToRgba(color, 0.95));
+  g.addColorStop(0.5, hexToRgba(color, 0.5));
+  g.addColorStop(1, hexToRgba(color, 0));
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+  ctx.fill();
+}
+function drawSegment(ctx, a, b, tool, color, size) {
+  if (tool === 'brush-soft') {
+    const dist = Math.hypot(b.x - a.x, b.y - a.y);
+    const spacing = Math.max(1.5, size * 0.16);
+    const steps = Math.max(1, Math.ceil(dist / spacing));
+    for (let i = 1; i <= steps; i++) {
+      stampSoft(ctx, { x: a.x + (b.x - a.x) * i / steps, y: a.y + (b.y - a.y) * i / steps }, color, size);
+    }
+    return;
+  }
+  // 硬笔 / 橡皮：圆头线段
+  ctx.strokeStyle = tool === 'eraser' ? '#000' : color;
+  ctx.lineWidth = size;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  if (distSmall(a, b)) stampHard(ctx, b, tool === 'eraser' ? '#000' : color, size);
+}
+function distSmall(a, b) { return Math.hypot(b.x - a.x, b.y - a.y) < 0.6; }
+
+function beginStroke(p) {
+  const layer = activeLayer();
+  if (!layer) { toast('没有可用图层', 'warn'); return; }
+  const tool = state.tool;
+  // 整层快照（结束后裁成 dirty 矩形保存，控制内存）
+  const before = layer.ctx.getImageData(0, 0, DOC_W, DOC_H);
+  layer.ctx.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over';
+  state.stroke = {
+    layerId: layer.id,
+    before,
+    points: [p],
+    tool,
+    color: state.color,
+    size: state.size,
+    dirty: { x0: p.x, y0: p.y, x1: p.x, y1: p.y },
+    startedAt: performance.now()
+  };
+  if (tool === 'brush-soft') stampSoft(layer.ctx, p, state.color, state.size);
+  else stampHard(layer.ctx, p, tool === 'eraser' ? '#000' : state.color, state.size);
+  requestRender();
+}
+
+function continueStroke(p) {
+  const s = state.stroke;
+  if (!s) return;
+  const layer = findLayer(s.layerId);
+  if (!layer) return;
+  const last = s.points[s.points.length - 1];
+  if (Math.hypot(p.x - last.x, p.y - last.y) < 1.0) return;
+  drawSegment(layer.ctx, last, p, s.tool, s.color, s.size);
+  s.points.push(p);
+  s.dirty.x0 = Math.min(s.dirty.x0, p.x);
+  s.dirty.y0 = Math.min(s.dirty.y0, p.y);
+  s.dirty.x1 = Math.max(s.dirty.x1, p.x);
+  s.dirty.y1 = Math.max(s.dirty.y1, p.y);
+  requestRender();
+}
+
+function endStroke() {
+  const s = state.stroke;
+  if (!s) return;
+  state.stroke = null;
+  const layer = findLayer(s.layerId);
+  if (!layer) return;
+  layer.ctx.globalCompositeOperation = 'source-over';
+  const pad = Math.ceil(s.size / 2) + 3;
+  const x = clamp(Math.floor(s.dirty.x0 - pad), 0, DOC_W);
+  const y = clamp(Math.floor(s.dirty.y0 - pad), 0, DOC_H);
+  const x1 = clamp(Math.ceil(s.dirty.x1 + pad), 0, DOC_W);
+  const y1 = clamp(Math.ceil(s.dirty.y1 + pad), 0, DOC_H);
+  const w = x1 - x, h = y1 - y;
+  if (w > 0 && h > 0 && s.points.length > 0) {
+    // 从整层快照中裁出脏矩形，作为撤销数据
+    const tmp = document.createElement('canvas');
+    tmp.width = DOC_W; tmp.height = DOC_H;
+    const tctx = tmp.getContext('2d');
+    tctx.putImageData(s.before, 0, 0);
+    const beforeRect = tctx.getImageData(x, y, w, h);
+    pushHistory(makePixelHistoryEntry(s.layerId, { x, y, w, h }, beforeRect, s.tool));
+    state.strokeCount += 1;
+    logEvent('stroke', {
+      layer_id: s.layerId,
+      tool: s.tool,
+      points: s.points.length,
+      bbox: [x, y, w, h],
+      duration_ms: Math.round(performance.now() - s.startedAt)
+    });
+  }
+  setStatusHint(`已落笔 · 第 ${state.strokeCount} 笔 · 可 Ctrl+Z 撤销`);
+  renderAll();
+}
+
+/* ---------- 覆盖层（选区 / 锚点 / 预览） ---------- */
+let rafPending = false;
+function requestRender() {
+  if (rafPending) return;
+  rafPending = true;
+  requestAnimationFrame(() => {
+    rafPending = false;
+    renderCanvas();
+    renderOverlay();
+  });
+}
+
+function roundRectPath(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+function drawSelectionRect(ctx, rect) {
+  const { x, y, w, h } = rect;
+  // 选区外轻微压暗 18%（对应交互规格“画布变暗 8%”，这里为便于示意略强）
+  ctx.save();
+  ctx.fillStyle = 'rgba(3,7,12,.18)';
+  ctx.fillRect(0, 0, DOC_W, y);
+  ctx.fillRect(0, y + h, DOC_W, DOC_H - y - h);
+  ctx.fillRect(0, y, x, h);
+  ctx.fillRect(x + w, y, DOC_W - x - w, h);
+  // 虚线框
+  ctx.setLineDash([10, 6]);
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = '#38bdf8';
+  ctx.strokeRect(x, y, w, h);
+  ctx.setLineDash([]);
+  // 四角手柄
+  ctx.fillStyle = '#38bdf8';
+  const cs = 5;
+  for (const [cx, cy] of [[x, y], [x + w, y], [x, y + h], [x + w, y + h]]) {
+    ctx.fillRect(cx - cs / 2, cy - cs / 2, cs, cs);
+  }
+  // 左上角标签
+  const label = '指认区域';
+  ctx.font = '600 15px "Microsoft YaHei", "Segoe UI", sans-serif';
+  const tw = ctx.measureText(label).width;
+  ctx.fillStyle = 'rgba(8,20,34,.92)';
+  roundRectPath(ctx, x, Math.max(0, y - 28), tw + 20, 24, 6);
+  ctx.fill();
+  ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = '#7dd3fc';
+  ctx.fillText(label, x + 10, Math.max(0, y - 28) + 17);
+  ctx.restore();
+}
+
+const SOURCE_META = {
+  observed: { color: '#94a3b8', label: '可见', icon: '👁' },
+  inferred: { color: '#f0a83c', label: 'AI 推断', icon: '◇' },
+  'user-confirmed': { color: '#34d399', label: '你确认', icon: '✓' },
+  rejected: { color: '#f87171', label: '已否决', icon: '✕' }
+};
+
+function drawAnchorHighlight(ctx, obs) {
+  const rect = obs.anchorRect;
+  if (!rect) return;
+  const meta = SOURCE_META[obs.source] || SOURCE_META.observed;
+  const { x, y, w, h } = rect;
+  ctx.save();
+  // 区域提亮
+  ctx.fillStyle = hexToRgba(meta.color, 0.10);
+  ctx.fillRect(x, y, w, h);
+  // 描边：inferred 虚线 / user-confirmed 双线 / observed 实线（形状 + 颜色双编码）
+  ctx.strokeStyle = meta.color;
+  ctx.lineWidth = obs.source === 'user-confirmed' ? 3 : 2.5;
+  if (obs.source === 'inferred') ctx.setLineDash([8, 5]);
+  ctx.strokeRect(x, y, w, h);
+  if (obs.source === 'user-confirmed') {
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 5, y + 5, Math.max(0, w - 10), Math.max(0, h - 10));
+  }
+  ctx.setLineDash([]);
+  // 角标
+  const label = `${obs.id} · ${meta.icon} ${meta.label}`;
+  ctx.font = '600 13px "Microsoft YaHei", "Segoe UI", sans-serif';
+  const tw = ctx.measureText(label).width;
+  const ly = Math.max(4, y - 26);
+  ctx.fillStyle = 'rgba(6,14,24,.92)';
+  roundRectPath(ctx, x, ly, tw + 16, 22, 5);
+  ctx.fill();
+  ctx.strokeStyle = meta.color; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = meta.color;
+  ctx.fillText(label, x + 8, ly + 16);
+  ctx.restore();
+}
+
+function drawPreviewGhost(ctx, proposal) {
+  if (!proposal || !proposal.rect) return;
+  const { x, y, w, h } = proposal.rect;
+  ctx.save();
+  ctx.globalAlpha = 0.96;
+  ctx.drawImage(proposal.canvas, x, y);
+  ctx.globalAlpha = 1;
+  ctx.setLineDash([9, 6]);
+  ctx.strokeStyle = '#60a5fa';
+  ctx.lineWidth = 2.5;
+  ctx.strokeRect(x, y, w, h);
+  ctx.setLineDash([]);
+  ctx.font = '600 14px "Microsoft YaHei", "Segoe UI", sans-serif';
+  const label = '预览 · 模拟生成（未落盘）';
+  const tw = ctx.measureText(label).width;
+  const ly = Math.max(4, y - 28);
+  ctx.fillStyle = 'rgba(8,20,34,.94)';
+  roundRectPath(ctx, x, ly, tw + 20, 24, 6);
+  ctx.fill();
+  ctx.strokeStyle = '#60a5fa'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = '#bfdbfe';
+  ctx.fillText(label, x + 10, ly + 17);
+  ctx.restore();
+}
+
+function renderOverlay() {
+  overlayCtx.clearRect(0, 0, DOC_W, DOC_H);
+  if (state.selection && !state.previewProposalId) drawSelectionRect(overlayCtx, state.selection);
+  const obsId = state.highlightObsId || state.hoverObsId;
+  if (obsId) {
+    const obs = state.observations.find(o => o.id === obsId);
+    if (obs) drawAnchorHighlight(overlayCtx, obs);
+  }
+  if (state.previewProposalId) {
+    const p = state.proposals.find(x => x.id === state.previewProposalId);
+    if (p) drawPreviewGhost(overlayCtx, p);
+  }
+}
+
+/* ---------- 框选指认 ---------- */
+function beginSelection(p) {
+  state.drag = { type: 'selection', start: p, current: p };
+  renderOverlay();
+}
+function updateSelectionDrag(p) {
+  const d = state.drag;
+  if (!d || d.type !== 'selection') return;
+  d.current = p;
+  const rect = normalizeRect(d.start, d.current);
+  state.selection = rect;
+  renderOverlay();
+  setStatusHint(`指认区域 ${Math.round(rect.w)} × ${Math.round(rect.h)} · 点「让 AI 看看」`);
+}
+function endSelectionDrag() {
+  const d = state.drag;
+  state.drag = null;
+  if (!d || d.type !== 'selection') return;
+  const rect = normalizeRect(d.start, d.current);
+  if (rect.w < 16 || rect.h < 16) {
+    state.selection = null;
+    renderOverlay();
+    setStatusHint('框选区域太小，已取消');
+    return;
+  }
+  state.selection = rect;
+  logEvent('selection_set', { bbox: [Math.round(rect.x), Math.round(rect.y), Math.round(rect.w), Math.round(rect.h)], tool: 'rect' });
+  renderOverlay();
+  showCanvasToast('已指认区域 · 点「让 AI 看看」（K）', 2600);
+  setStatusHint(`已指认 ${Math.round(rect.w)} × ${Math.round(rect.h)} 的区域`);
+  // 若已打开 AI 面板结果，提示需要重新请求
+  if (state.observations.length) {
+    setStatusHint('区域已更新 · 可再次点「让 AI 看看」');
+  }
+}
+function normalizeRect(a, b) {
+  return {
+    x: Math.min(a.x, b.x),
+    y: Math.min(a.y, b.y),
+    w: Math.abs(a.x - b.x),
+    h: Math.abs(a.y - b.y)
+  };
+}
+
+/* ---------- 移动 AI 图层 ---------- */
+function beginLayerMove(p) {
+  const layer = activeLayer();
+  if (!layer) { toast('请先在图层列表选中一个图层', 'warn'); return; }
+  if (layer.kind !== 'ai') { toast('「移动」工具用于 AI 图层；请先选中一个 AI 图层', 'warn'); return; }
+  state.drag = {
+    type: 'layer-move',
+    layerId: layer.id,
+    start: p,
+    origin: { ...layer.offset },
+    before: { ...layer.offset }
+  };
+  toast('拖动中：AI 图层会跟随移动');
+}
+function updateLayerMove(p) {
+  const d = state.drag;
+  if (!d || d.type !== 'layer-move') return;
+  const layer = findLayer(d.layerId);
+  if (!layer) return;
+  layer.offset = {
+    x: d.origin.x + (p.x - d.start.x),
+    y: d.origin.y + (p.y - d.start.y)
+  };
+  requestRender();
+}
+function endLayerMove() {
+  const d = state.drag;
+  state.drag = null;
+  if (!d || d.type !== 'layer-move') return;
+  const layer = findLayer(d.layerId);
+  if (!layer) return;
+  const before = { ...d.before };
+  const after = { ...layer.offset };
+  if (before.x === after.x && before.y === after.y) return;
+  pushHistory(makeActionHistory(
+    () => { const l = findLayer(d.layerId); if (l) { l.offset = { ...before }; renderAll(); } },
+    () => { const l = findLayer(d.layerId); if (l) { l.offset = { ...after }; renderAll(); } },
+    '移动图层'
+  ));
+  logEvent('ai_layer_moved', { layer_id: d.layerId, from: before, to: after });
+  renderAll();
+}
+
+/* ---------- 全局指针事件 ---------- */
+function onPointerDown(e) {
+  if (e.button !== 0 && e.pointerType === 'mouse') return;
+  e.preventDefault();
+  dom.mainCanvas.focus();
+  const p = pointerPos(e);
+  if (state.tool === 'select') beginSelection(p);
+  else if (state.tool === 'move') beginLayerMove(p);
+  else beginStroke(p);
+}
+function onPointerMove(e) {
+  const p = pointerPos(e);
+  if (state.stroke) continueStroke(p);
+  else if (state.drag && state.drag.type === 'selection') updateSelectionDrag(p);
+  else if (state.drag && state.drag.type === 'layer-move') updateLayerMove(p);
+}
+function onPointerUp() {
+  if (state.stroke) endStroke();
+  else if (state.drag) {
+    if (state.drag.type === 'selection') endSelectionDrag();
+    else if (state.drag.type === 'layer-move') endLayerMove();
+    else state.drag = null;
+  }
+}
+
+/* ---------- 工具切换 / 颜色 / 粗细 ---------- */
+const TOOL_META = {
+  'brush-hard': { cursor: 'crosshair', hint: '硬笔：画轮廓/线稿，Ctrl+Z 撤销' },
+  'brush-soft': { cursor: 'crosshair', hint: '软笔：画雾、光影与过渡' },
+  'eraser':     { cursor: 'cell',      hint: '橡皮：擦除当前图层像素' },
+  'select':     { cursor: 'crosshair', hint: '框选：在画布上圈出「卡住」的区域' },
+  'move':       { cursor: 'grab',      hint: '移动：拖动选中的 AI 图层' }
+};
+function setTool(tool) {
+  if (!TOOL_META[tool]) return;
+  if (state.stroke) endStroke();
+  state.tool = tool;
+  document.querySelectorAll('[data-tool]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tool === tool);
+  });
+  dom.mainCanvas.style.cursor = TOOL_META[tool].cursor;
+  setStatusHint(TOOL_META[tool].hint);
+}
+function setColor(color) {
+  state.color = color;
+  dom.colorInput.value = color;
+  document.querySelectorAll('.swatch').forEach(s => s.classList.toggle('active', s.dataset.color.toLowerCase() === color.toLowerCase()));
+}
+function setSize(size) {
+  state.size = size;
+  dom.sizeRange.value = size;
+  dom.sizeVal.textContent = size + ' px';
+}
+
+/* ---------- 图层操作 ---------- */
+function toggleLayersPanel(force) {
+  const panel = document.querySelector('.layers-panel');
+  if (!panel) return;
+  const collapsed = typeof force === 'boolean' ? force : !panel.classList.contains('collapsed');
+  panel.classList.toggle('collapsed', collapsed);
+  const btn = $('btnCollapseLayers');
+  if (btn) btn.textContent = collapsed ? '⌄' : '⌃';
+  requestAnimationFrame(() => { layoutCanvas(); renderOverlay(); });
+}
+
+function selectLayer(id) {
+  state.activeLayerId = id;
+  renderLayerList();
+  const layer = activeLayer();
+  if (layer) setStatusHint(`已选中图层「${layer.name}」${layer.kind === 'ai' ? ' · 可拖动/隐藏/调透明度' : ''}`);
+}
+function toggleLayerVisible(id) {
+  const layer = findLayer(id);
+  if (!layer) return;
+  const before = layer.visible;
+  layer.visible = !layer.visible;
+  pushHistory(makeActionHistory(
+    () => { const l = findLayer(id); if (l) { l.visible = before; renderAll(); } },
+    () => { const l = findLayer(id); if (l) { l.visible = !before; renderAll(); } },
+    '显隐图层'
+  ));
+  logEvent('layer_visibility', { layer_id: id, visible: layer.visible });
+  renderAll();
+}
+function addUserLayer() {
+  const n = state.layers.filter(l => l.kind === 'user').length + 1;
+  const layer = makeLayer(`图层 ${n}`, 'user');
+  state.layers.push(layer);
+  state.activeLayerId = layer.id;
+  pushHistory(makeActionHistory(
+    () => { state.layers = state.layers.filter(l => l.id !== layer.id); renderAll(); },
+    () => { state.layers.push(layer); state.activeLayerId = layer.id; renderAll(); },
+    '新建图层'
+  ));
+  logEvent('layer_added', { layer_id: layer.id, name: layer.name, kind: 'user' });
+  renderAll();
+  setStatusHint(`已新建「${layer.name}」`);
+}
+function deleteActiveLayer() {
+  const layer = activeLayer();
+  if (!layer || state.layers.length <= 1) { toast('至少保留一个图层', 'warn'); return; }
+  const index = state.layers.indexOf(layer);
+  state.layers.splice(index, 1);
+  state.activeLayerId = state.layers[Math.max(0, index - 1)]?.id || null;
+  pushHistory(makeActionHistory(
+    () => { state.layers.splice(index, 0, layer); state.activeLayerId = layer.id; renderAll(); },
+    () => { state.layers = state.layers.filter(l => l.id !== layer.id); renderAll(); },
+    '删除图层'
+  ));
+  logEvent('layer_deleted', { layer_id: layer.id, name: layer.name, kind: layer.kind });
+  if (layer.kind === 'ai') {
+    recordDecision({ kind: 'delete_ai_layer', layer_id: layer.id, note: `删除 AI 图层「${layer.name}」`, ref: layer.aiMeta?.generationId || null });
+    const aiEv = state.aiEvents.find(ev => ev.id === layer.aiMeta?.generationId);
+    if (aiEv) aiEv.accepted = false;
+    toast('已删除 AI 图层，并记入决策记录', 'ok');
+  }
+  renderAll();
+}
+function moveLayer(direction) {
+  const layer = activeLayer();
+  if (!layer) return;
+  const i = state.layers.indexOf(layer);
+  const j = i + direction;
+  if (j < 0 || j >= state.layers.length) return;
+  const arr = state.layers;
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+  pushHistory(makeActionHistory(
+    () => { const a = state.layers; const k = a.indexOf(layer); const t = a[k - direction]; a[k] = t; a[k - direction] = layer; renderAll(); },
+    () => { const a = state.layers; const k = a.indexOf(layer); const t = a[k + direction]; a[k] = t; a[k + direction] = layer; renderAll(); },
+    '调整图层顺序'
+  ));
+  logEvent('layer_reordered', { layer_id: layer.id, direction });
+  renderAll();
+}
+function setLayerOpacityFromSlider(live) {
+  const layer = activeLayer();
+  if (!layer) return;
+  const v = Number(dom.layerOpacity.value) / 100;
+  layer.opacity = v;
+  dom.layerOpacityVal.textContent = Math.round(v * 100) + '%';
+  if (live) { requestRender(); }
+  else {
+    renderAll();
+    logEvent('layer_opacity', { layer_id: layer.id, opacity: v });
+  }
+}
+
+/* ---------- L5 决策记录 ---------- */
+function recordDecision(dec) {
+  const rec = {
+    id: 'L5-' + String(state.decisions.length + 1).padStart(3, '0'),
+    ts: nowIso(),
+    mode: state.mode,
+    ...dec
+  };
+  state.decisions.push(rec);
+  updateStatusBar();
+  return rec;
+}
+/* =========================================================================
+   PART E · 示例作品：全部由 canvas 代码绘制（无外部图片），用于现场演示
+   ========================================================================= */
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* 底图：夜空 + 星 + 月 */
+function paintNightSky(ctx) {
+  const rnd = mulberry32(20261106);
+  const bg = ctx.createLinearGradient(0, 0, 0, DOC_H);
+  bg.addColorStop(0, '#07111d');
+  bg.addColorStop(0.34, '#0e2438');
+  bg.addColorStop(0.58, '#1b3b52');
+  bg.addColorStop(0.78, '#2b4f60');
+  bg.addColorStop(1, '#122433');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, DOC_W, DOC_H);
+
+  // 银河薄雾
+  const neb = ctx.createRadialGradient(720, 210, 30, 720, 210, 560);
+  neb.addColorStop(0, 'rgba(150,190,255,.10)');
+  neb.addColorStop(0.5, 'rgba(130,170,235,.05)');
+  neb.addColorStop(1, 'rgba(130,170,235,0)');
+  ctx.fillStyle = neb;
+  ctx.fillRect(0, 0, DOC_W, DOC_H);
+
+  // 星星
+  for (let i = 0; i < 240; i++) {
+    const x = rnd() * DOC_W;
+    const y = rnd() * DOC_H * 0.62;
+    const r = 0.5 + rnd() * 1.5;
+    const a = 0.15 + rnd() * 0.75;
+    ctx.fillStyle = rnd() > 0.82 ? `rgba(255,244,214,${a})` : `rgba(206,228,255,${a})`;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 月晕
+  const moonX = 905, moonY = 168;
+  const halo = ctx.createRadialGradient(moonX, moonY, 24, moonX, moonY, 250);
+  halo.addColorStop(0, 'rgba(255,246,214,.32)');
+  halo.addColorStop(0.22, 'rgba(255,246,214,.12)');
+  halo.addColorStop(1, 'rgba(255,246,214,0)');
+  ctx.fillStyle = halo;
+  ctx.fillRect(0, 0, DOC_W, DOC_H);
+
+  // 月盘
+  const moon = ctx.createRadialGradient(moonX - 20, moonY - 22, 4, moonX, moonY, 68);
+  moon.addColorStop(0, '#fffdf4');
+  moon.addColorStop(0.72, '#f4ecd6');
+  moon.addColorStop(1, '#d8cdab');
+  ctx.fillStyle = moon;
+  ctx.beginPath();
+  ctx.arc(moonX, moonY, 66, 0, Math.PI * 2);
+  ctx.fill();
+  // 月面纹理
+  ctx.save();
+  ctx.beginPath(); ctx.arc(moonX, moonY, 66, 0, Math.PI * 2); ctx.clip();
+  for (let i = 0; i < 9; i++) {
+    ctx.fillStyle = `rgba(190,178,148,${0.05 + rnd() * 0.08})`;
+    ctx.beginPath();
+    ctx.arc(moonX - 40 + rnd() * 80, moonY - 40 + rnd() * 80, 3 + rnd() * 13, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // 近地平线的暖灰雾光
+  const hz = ctx.createLinearGradient(0, 380, 0, 700);
+  hz.addColorStop(0, 'rgba(140,185,200,0)');
+  hz.addColorStop(0.5, 'rgba(140,185,200,.14)');
+  hz.addColorStop(1, 'rgba(140,185,200,0)');
+  ctx.fillStyle = hz;
+  ctx.fillRect(0, 380, DOC_W, 320);
+
+  // 暗角
+  const vig = ctx.createRadialGradient(DOC_W / 2, DOC_H * 0.44, 240, DOC_W / 2, DOC_H * 0.44, 820);
+  vig.addColorStop(0, 'rgba(0,0,0,0)');
+  vig.addColorStop(1, 'rgba(0,0,0,.45)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, DOC_W, DOC_H);
+}
+
+/* 图层：远山 / 近山剪影 + 山脊微光 */
+function paintMountains(ctx) {
+  const rnd = mulberry32(88117);
+
+  // 远山
+  const far = [[-60, 540], [90, 452], [230, 500], [400, 436], [545, 482], [700, 428], [840, 470], [985, 424], [1130, 478], [1260, 446]];
+  ctx.beginPath();
+  ctx.moveTo(-60, DOC_H);
+  for (const [x, y] of far) ctx.lineTo(x, y);
+  ctx.lineTo(1260, DOC_H);
+  ctx.closePath();
+  const fg = ctx.createLinearGradient(0, 420, 0, 760);
+  fg.addColorStop(0, '#2c5a74');
+  fg.addColorStop(0.55, '#1c3c50');
+  fg.addColorStop(1, '#122c3b');
+  ctx.fillStyle = fg;
+  ctx.fill();
+  // 山脊微光（月光从右上打来）
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  ctx.strokeStyle = 'rgba(190,225,245,.20)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  far.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+  ctx.stroke();
+  ctx.restore();
+
+  // 中景山
+  const mid = [[-60, 650], [110, 560], [250, 616], [400, 542], [545, 606], [690, 556], [830, 620], [975, 566], [1120, 628], [1260, 580]];
+  ctx.beginPath();
+  ctx.moveTo(-60, DOC_H);
+  for (const [x, y] of mid) ctx.lineTo(x, y);
+  ctx.lineTo(1260, DOC_H);
+  ctx.closePath();
+  const mg = ctx.createLinearGradient(0, 540, 0, 800);
+  mg.addColorStop(0, '#1a3a4c');
+  mg.addColorStop(1, '#0c2230');
+  ctx.fillStyle = mg;
+  ctx.fill();
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  ctx.strokeStyle = 'rgba(150,200,225,.12)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  mid.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+  ctx.stroke();
+  ctx.restore();
+
+  // 近景山脊（压住画面下缘）
+  const near = [[-60, 790], [150, 700], [330, 776], [520, 724], [700, 796], [900, 736], [1080, 800], [1260, 754]];
+  ctx.beginPath();
+  ctx.moveTo(-60, DOC_H);
+  ctx.lineTo(-60, 790);
+  for (const [x, y] of near) ctx.lineTo(x, y);
+  ctx.lineTo(1260, DOC_H);
+  ctx.closePath();
+  ctx.fillStyle = '#081722';
+  ctx.fill();
+
+  // 山体轻微笔触（让画面不像纯矢量）
+  for (let i = 0; i < 140; i++) {
+    const x = rnd() * DOC_W;
+    const y = 470 + rnd() * 250;
+    ctx.strokeStyle = `rgba(${120 + rnd() * 60},${160 + rnd() * 50},${180 + rnd() * 40},${0.02 + rnd() * 0.04})`;
+    ctx.lineWidth = 1 + rnd() * 2;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + 20 + rnd() * 60, y - 4 - rnd() * 14);
+    ctx.stroke();
+  }
+}
+
+/* 细节层：雾带 / 湖面 / 月影 / 小船与灯 / 松树 / 飞鸟 */
+function paintMistAndDetails(ctx) {
+  const rnd = mulberry32(51508);
+
+  // 雾带（横向辉光椭圆）
+  function mist(cx, cy, rx, ry, alpha) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(1, ry / rx);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+    g.addColorStop(0, `rgba(198,224,235,${alpha})`);
+    g.addColorStop(0.55, `rgba(198,224,235,${alpha * 0.45})`);
+    g.addColorStop(1, 'rgba(198,224,235,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(0, 0, rx, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  mist(640, 512, 540, 84, 0.20);
+  mist(300, 590, 460, 70, 0.13);
+  mist(920, 556, 400, 62, 0.11);
+  mist(600, 648, 620, 54, 0.10);
+
+  // 月光柱
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  const shaft = ctx.createLinearGradient(900, 180, 560, 700);
+  shaft.addColorStop(0, 'rgba(220,240,255,.16)');
+  shaft.addColorStop(1, 'rgba(220,240,255,0)');
+  ctx.fillStyle = shaft;
+  ctx.beginPath();
+  ctx.moveTo(830, 170);
+  ctx.lineTo(990, 190);
+  ctx.lineTo(800, 690);
+  ctx.lineTo(560, 690);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // 湖面
+  const lake = ctx.createLinearGradient(0, 632, 0, DOC_H);
+  lake.addColorStop(0, 'rgba(16,40,52,.38)');
+  lake.addColorStop(0.22, 'rgba(9,27,38,.92)');
+  lake.addColorStop(1, '#04131d');
+  ctx.fillStyle = lake;
+  ctx.fillRect(0, 632, DOC_W, DOC_H - 632);
+
+  // 水面波纹
+  for (let i = 0; i < 70; i++) {
+    const y = 642 + rnd() * 152;
+    const x = rnd() * DOC_W;
+    const w = 20 + rnd() * 130;
+    ctx.strokeStyle = `rgba(150,196,214,${0.02 + rnd() * 0.06})`;
+    ctx.lineWidth = 1 + rnd() * 1.4;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.quadraticCurveTo(x + w / 2, y - 1.5, x + w, y);
+    ctx.stroke();
+  }
+
+  // 月影（倒影）
+  for (let i = 0; i < 30; i++) {
+    const y = 646 + i * 5.2;
+    const w = 92 - i * 2.1 + rnd() * 26;
+    const a = 0.20 * (1 - i / 34);
+    ctx.fillStyle = `rgba(238,240,214,${Math.max(0, a)})`;
+    ctx.beginPath();
+    ctx.ellipse(905 + Math.sin(i * 0.7) * 5, y, Math.max(4, w / 2), 1.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 松树剪影
+  function pine(x, baseY, h, w, color) {
+    ctx.fillStyle = color;
+    for (let i = 0; i < 3; i++) {
+      const top = baseY - h * (1 - i * 0.26);
+      const half = w * (0.36 + i * 0.30);
+      ctx.beginPath();
+      ctx.moveTo(x, top - h * 0.12);
+      ctx.lineTo(x - half, baseY - (h * 0.12) * (2 - i));
+      ctx.lineTo(x + half, baseY - (h * 0.12) * (2 - i));
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.fillRect(x - 3, baseY - 22, 6, 24);
+  }
+  pine(96, 800, 250, 52, '#040d14');
+  pine(176, 800, 190, 40, '#061019');
+  pine(246, 800, 140, 30, '#030b11');
+  pine(1108, 800, 170, 38, '#040d14');
+  pine(1170, 800, 120, 28, '#02090e');
+
+  // 小船 + 灯
+  const bx = 420, by = 652;
+  // 灯光辉光
+  const glow = ctx.createRadialGradient(bx + 4, by - 20, 1, bx + 4, by - 20, 58);
+  glow.addColorStop(0, 'rgba(255,196,120,.85)');
+  glow.addColorStop(0.25, 'rgba(255,170,80,.28)');
+  glow.addColorStop(1, 'rgba(255,160,60,0)');
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(bx + 4, by - 20, 58, 0, Math.PI * 2);
+  ctx.fill();
+  // 船体
+  ctx.fillStyle = '#04101a';
+  ctx.beginPath();
+  ctx.moveTo(bx - 30, by - 4);
+  ctx.quadraticCurveTo(bx, by + 14, bx + 30, by - 4);
+  ctx.quadraticCurveTo(bx, by + 4, bx - 30, by - 4);
+  ctx.closePath();
+  ctx.fill();
+  // 人
+  ctx.strokeStyle = '#06131d';
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(bx + 12, by - 8);
+  ctx.lineTo(bx + 13, by - 34);
+  ctx.moveTo(bx + 13, by - 34);
+  ctx.lineTo(bx + 19, by - 42);
+  ctx.stroke();
+  // 灯
+  ctx.fillStyle = '#ffd08a';
+  ctx.beginPath();
+  ctx.arc(bx + 4, by - 20, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,180,90,.9)';
+  ctx.fillRect(bx + 2, by - 16, 4, 18);
+  // 灯的倒影
+  for (let i = 0; i < 8; i++) {
+    ctx.fillStyle = `rgba(255,190,110,${0.2 - i * 0.022})`;
+    ctx.beginPath();
+    ctx.ellipse(bx + 4, by + 8 + i * 6, 6 + i * 1.4, 1.4, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 飞鸟
+  ctx.strokeStyle = 'rgba(10,20,28,.75)';
+  ctx.lineWidth = 2;
+  for (const [x, y, s] of [[330, 236, 9], [366, 218, 7], [398, 246, 8], [452, 226, 6]]) {
+    ctx.beginPath();
+    ctx.moveTo(x - s, y);
+    ctx.quadraticCurveTo(x - s / 2, y - s * 0.7, x, y);
+    ctx.quadraticCurveTo(x + s / 2, y - s * 0.7, x + s, y);
+    ctx.stroke();
+  }
+
+  // 星点高光（画面细碎颗粒，避免死板）
+  for (let i = 0; i < 320; i++) {
+    ctx.fillStyle = `rgba(200,225,240,${0.015 + rnd() * 0.03})`;
+    ctx.fillRect(rnd() * DOC_W, rnd() * DOC_H, 1, 1);
+  }
+}
+
+/* 重置会话并载入示例作品 */
+async function loadExampleArtwork(opts = {}) {
+  const silent = !!opts.silent;
+  // 清空会话数据（保留当前模式与哈希能力）
+  state.layers = [];
+  state.undoStack = []; state.redoStack = [];
+  state.decisions = []; state.events = []; state.aiEvents = []; state.seq = 0;
+  state.observations = []; state.aiReview = null; state.proposals = [];
+  state.selectedDirectionId = null; state.previewProposalId = null;
+  state.highlightObsId = null; state.hoverObsId = null;
+  state.strokeCount = 0; state.selection = null;
+  state.drag = null; state.stroke = null; state.aiBusy = false;
+  state.ignoreArchive = false;
+  if (dom.canvasToast) dom.canvasToast.style.display = 'none';
+
+  // 生成 3 个图层
+  const sky = makeLayer('底图 · 夜空与月', 'base');
+  paintNightSky(sky.ctx);
+  const mountain = makeLayer('图层 · 远山', 'user');
+  paintMountains(mountain.ctx);
+  const detail = makeLayer('细节 · 雾与灯', 'user');
+  paintMistAndDetails(detail.ctx);
+  state.layers.push(sky, mountain, detail);
+  state.activeLayerId = detail.id;
+  state.exampleLoaded = true;
+
+  // 默认框选一块「卡住」区域（雾带 / 山脊 / 小船交界处）
+  state.selection = { x: 300, y: 430, w: 440, h: 250 };
+
+  logEvent('example_loaded', {
+    layers: 3,
+    layer_names: state.layers.map(l => l.name),
+    note: '示例作品由 canvas 代码绘制（非用户上传），用于现场演示'
+  });
+
+  renderAll();
+  layoutCanvas();
+  renderAiPanel();
+  setStatusHint('示例作品已载入 · 已自动框选区域 · 点「让 AI 看看」（K）');
+  showCanvasToast('示例已载入 · 已框选一块「卡住」区域 → 点「让 AI 看看」（K）', 4200);
+  if (!silent) toast('示例作品已载入（canvas 代码绘制）', 'ok');
+}
+/* =========================================================================
+   PART F · 「让 AI 看看」：Mock 观察 / 方向 / 模拟方案 / 落层 / 档案决策
+   ========================================================================= */
+state.generating = false;
+state.committedProposalId = null;
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function bboxArray(rect) {
+  return [Math.round(rect.x), Math.round(rect.y), Math.round(rect.w), Math.round(rect.h)];
+}
+function defaultSelectionRect() {
+  return { x: DOC_W * 0.26, y: DOC_H * 0.38, w: DOC_W * 0.42, h: DOC_H * 0.34 };
+}
+
+/* 采样选区平均色（用于让 Mock 观察"看起来确实看到了这张画"） */
+function sampleRegionAverageColor(rect) {
+  renderComposite(scratchCtx);
+  const x = clamp(Math.floor(rect.x), 0, DOC_W - 1);
+  const y = clamp(Math.floor(rect.y), 0, DOC_H - 1);
+  const w = clamp(Math.floor(rect.w), 1, DOC_W - x);
+  const h = clamp(Math.floor(rect.h), 1, DOC_H - y);
+  const data = scratchCtx.getImageData(x, y, w, h).data;
+  const step = Math.max(4, Math.floor(Math.min(w, h) / 26)) * 4;
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let i = 0; i < data.length; i += step) {
+    r += data[i]; g += data[i + 1]; b += data[i + 2]; n++;
+  }
+  if (!n) return { hex: '#2F6F8F', colorTemp: '冷', brightDesc: '中等', luma: 110 };
+  r = Math.round(r / n); g = Math.round(g / n); b = Math.round(b / n);
+  const hex = '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase();
+  const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+  return {
+    hex,
+    colorTemp: (r > b + 12) ? '暖' : (b > r + 12 ? '冷' : '中性'),
+    brightDesc: luma > 150 ? '偏亮' : (luma > 75 ? '中等' : '偏暗'),
+    luma
+  };
+}
+
+function formatTemplate(str, ctx) {
+  return String(str)
+    .replace(/\{avgHex\}/g, ctx.avgHex || '')
+    .replace(/\{colorTemp\}/g, ctx.colorTemp || '')
+    .replace(/\{brightDesc\}/g, ctx.brightDesc || '')
+    .replace(/\{bbox\}/g, ctx.bbox || '');
+}
+
+/* 依据模板生成当前画布上的锚点矩形 */
+function buildAnchorRect(tpl, sel) {
+  if (tpl.anchorType === 'fixed' && tpl.fixed) {
+    return { x: tpl.fixed.x * DOC_W, y: tpl.fixed.y * DOC_H, w: tpl.fixed.w * DOC_W, h: tpl.fixed.h * DOC_H };
+  }
+  if (tpl.anchorType === 'sub' && tpl.sub) {
+    return { x: sel.x + tpl.sub.x * sel.w, y: sel.y + tpl.sub.y * sel.h, w: sel.w * tpl.sub.w, h: sel.h * tpl.sub.h };
+  }
+  return { x: sel.x, y: sel.y, w: sel.w, h: sel.h };
+}
+
+function buildObservations(avg) {
+  const sel = state.selection || defaultSelectionRect();
+  const tplCtx = { avgHex: avg.hex, colorTemp: avg.colorTemp, brightDesc: avg.brightDesc, bbox: bboxArray(sel).join(', ') };
+  const list = MOCK.observations
+    .filter(tpl => !(state.ignoreArchive && tpl.source === 'user-confirmed'))
+    .map((tpl, i) => {
+      const anchor = buildAnchorRect(tpl, sel);
+      return {
+        id: 'L4-a7-0' + (14 + i),
+        key: tpl.key,
+        source: tpl.source,
+        originalSource: tpl.source,
+        confidence: tpl.confidence,
+        text: formatTemplate(tpl.text, tplCtx),
+        evidence: tpl.evidence.map(e => ({ k: e.k, v: formatTemplate(e.v, tplCtx) })),
+        anchorRect: anchor,
+        decision: null,
+        kind: 'observation'
+      };
+    });
+  return list;
+}
+
+function buildDirections(avg) {
+  const tplCtx = { avgHex: avg.hex, colorTemp: avg.colorTemp, brightDesc: avg.brightDesc, bbox: '' };
+  return MOCK.directions.map((d, i) => ({
+    id: d.key,
+    short: d.short,
+    title: d.title,
+    desc: formatTemplate(d.desc, tplCtx),
+    why: formatTemplate(d.why, tplCtx),
+    effect: d.effect,
+    index: i + 1
+  }));
+}
+
+/* ---------- 触发「让 AI 看看」（Mock） ---------- */
+async function askAi() {
+  if (state.mode === 'evidence') {
+    toast('存证模式已禁用 AI · 切回「协作模式」后再试', 'warn');
+    return;
+  }
+  if (state.aiBusy) return;
+  if (state.previewProposalId) cancelProposalPreview();
+  if (!state.selection) {
+    state.selection = defaultSelectionRect();
+    toast('没有框选，AI 默认看画面中部（先框选更准）', 'warn');
+  }
+  // 重置上一轮结果
+  state.aiBusy = true;
+  state.generating = false;
+  state.aiReview = null;
+  state.observations = [];
+  state.proposals = [];
+  state.selectedDirectionId = null;
+  state.previewProposalId = null;
+  state.committedProposalId = null;
+  state.highlightObsId = null;
+  state.hoverObsId = null;
+  updateStatusBar();
+  setStatusHint('AI 正在读你的画与档案（模拟）…');
+  renderAiPanel();
+  renderOverlay();
+
+  const t0 = performance.now();
+  const reqEvent = logAiEvent({
+    kind: 'critique',
+    model: MOCK.models.vlm,
+    note: '模拟 AI 观察（预置 Mock 数据，未调用真实模型）',
+    mode_at_request: state.mode,
+    params: { selection: bboxArray(state.selection), ignore_archive: state.ignoreArchive, directions: 2 },
+    input_refs: state.ignoreArchive ? [] : ['L1-a7', 'L2-a7-001', 'L4-a7-014', 'L5-a7-003'],
+    accepted: null
+  });
+  logEvent('ai_review_requested', {
+    selection: bboxArray(state.selection),
+    ignore_archive: state.ignoreArchive,
+    model: MOCK.models.vlm.name
+  });
+
+  const phases = ['AI 正在看你的画…', 'AI 正在读你的档案（L1/L2/L4）…', '正在组织可反驳的观察与方向…'];
+  let pi = 0;
+  const timer = setInterval(() => {
+    pi = Math.min(pi + 1, phases.length - 1);
+    const el = $('aiPhase');
+    if (el) el.textContent = phases[pi];
+  }, 460);
+
+  await sleep(MOCK.latency.observe);
+  clearInterval(timer);
+
+  const avg = sampleRegionAverageColor(state.selection);
+  state.observations = buildObservations(avg);
+  state.aiReview = {
+    requestedAt: new Date().toISOString(),
+    model: MOCK.models.vlm,
+    latencyMs: Math.round(performance.now() - t0),
+    avg,
+    ignoreArchive: state.ignoreArchive,
+    selection: { ...state.selection },
+    directions: buildDirections(avg)
+  };
+  reqEvent.latency_ms = state.aiReview.latencyMs;
+  reqEvent.output = { observations: state.observations.length, directions: 2, avg_hex: avg.hex };
+  state.aiBusy = false;
+  logEvent('ai_observations_shown', {
+    count: state.observations.length,
+    confidence_avg: +(state.observations.reduce((s, o) => s + (o.confidence || 0), 0) / Math.max(1, state.observations.length)).toFixed(2),
+    latency_ms: state.aiReview.latencyMs,
+    model: MOCK.models.vlm.name,
+    mock: true
+  });
+  renderAiPanel();
+  renderOverlay();
+  updateStatusBar();
+  setStatusHint('观察已返回（模拟）· 点击观察卡可在画布高亮锚点');
+  showCanvasToast('AI 观察已返回（模拟数据）· 点击卡片看画布锚点', 3200);
+}
+
+/* ---------- AI 面板渲染 ---------- */
+function sourceBadge(source) {
+  const m = SOURCE_META[source] || SOURCE_META.observed;
+  return `<span class="src-badge ${source}">${m.icon} ${m.label}</span>`;
+}
+function confidenceMarkup(obs) {
+  if (obs.confidence == null) return `<span class="conf">— 无置信度（可观察事实）</span>`;
+  const pct = Math.round(obs.confidence * 100);
+  const on = obs.confidence >= 0.8 ? 3 : (obs.confidence >= 0.5 ? 2 : 1);
+  const dots = [0, 1, 2].map(i => i < on ? '●' : '○').join('');
+  return `<span class="conf ${obs.confidence < 0.5 ? 'low' : ''}" title="模型自评置信度，不是准确率">${dots} ${pct}%${obs.confidence < 0.5 ? ' · 待确认' : ''}</span>`;
+}
+
+function observationCardHtml(obs) {
+  const chips = obs.evidence.map(e => `<span class="chip"><b style="color:#a9b8cf;font-weight:600">${escapeHtml(e.k)}</b> · ${escapeHtml(e.v)}</span>`).join('');
+  let actions;
+  if (obs.decision === 'confirmed') {
+    actions = `<div class="obs-state-line">✓ 已确认 · 已写入决策记录（AI 原话保留）</div>
+      <div class="card-actions"><button class="mini" data-obs-revert="${obs.id}">撤销这条决定</button></div>`;
+  } else if (obs.decision === 'rejected') {
+    actions = `<div class="obs-state-line">✕ 已否决 · 已写入决策记录，后续生成会排除这条</div>
+      <div class="card-actions"><button class="mini" data-obs-revert="${obs.id}">撤销否决</button></div>`;
+  } else {
+    actions = `<div class="card-actions">
+        <button class="mini ok" data-obs-confirm="${obs.id}">✓ 确认</button>
+        <button class="mini no" data-obs-reject="${obs.id}">✕ 不对</button>
+        <span class="obs-hint">点击卡片在画布看锚点</span>
+      </div>`;
+  }
+  return `<div class="obs-card" data-source="${obs.source}" data-obs-id="${obs.id}">
+    <div class="obs-top">${sourceBadge(obs.source)}${confidenceMarkup(obs)}
+      <span style="margin-left:auto;font-size:10px;color:#5f7692">${obs.id}</span>
+    </div>
+    <div class="obs-text">${escapeHtml(obs.text)}</div>
+    <div class="chips">${chips}</div>
+    ${actions}
+  </div>`;
+}
+
+function directionCardHtml(d) {
+  const active = state.selectedDirectionId === d.id;
+  return `<div class="dir-card ${active ? 'active' : ''}" data-dir-id="${d.id}">
+    <div class="check">✓</div>
+    <div class="dir-tag">方向 ${d.index} · ${escapeHtml(d.short)}</div>
+    <h3>${escapeHtml(d.title)}</h3>
+    <p>${escapeHtml(d.desc)}</p>
+    <div class="why">${escapeHtml(d.why)}<br>${escapeHtml(d.effect)}</div>
+  </div>`;
+}
+
+function renderProposalZone() {
+  if (state.mode === 'evidence') return '';
+  if (!state.selectedDirectionId) {
+    return `<div class="gen-note" style="margin-top:10px">↑ 选一个方向后，才会生成图片（模拟）。</div>`;
+  }
+  if (state.generating) {
+    return `<div class="progress-wrap">
+      <div class="progress-label"><span>正在用 canvas 滤镜生成 2 个模拟方案…</span><span>MOCK</span></div>
+      <div class="progress"><i></i></div>
+    </div>
+    <div class="gen-note">模拟生成：对选区套用 canvas 滤镜 + 色块，不调用任何图像模型。</div>`;
+  }
+  if (!state.proposals.length) {
+    return `<button class="btn primary big" id="btnGenProposals">根据方向生成 2 个模拟方案</button>
+      <div class="gen-note">模拟方式：canvas 滤镜 + 色块，不调用图像模型、不产生网络请求。</div>`;
+  }
+  const preview = state.proposals.find(p => p.id === state.previewProposalId);
+  const cards = state.proposals.map(p => {
+    const committed = state.committedProposalId === p.id;
+    return `<div class="prop-card ${preview && preview.id === p.id ? 'active' : ''}" data-prop-id="${p.id}">
+      <canvas class="prop-thumb" width="320" height="200" data-thumb-id="${p.id}"></canvas>
+      <div class="prop-info">
+        <div class="prop-badge">${committed ? '✓ 已落盘为 AI 图层' : '模拟生成 · 未调用模型'}</div>
+        <div class="t">${escapeHtml(p.title)}</div>
+        <div class="s">${escapeHtml(p.note)}</div>
+      </div>
+    </div>`;
+  }).join('');
+  const bar = preview ? `<div class="preview-bar">
+      <div class="pt">画布上正在预览「${escapeHtml(preview.title)}」· 虚线框内为模拟方案，还没落盘</div>
+      <div class="pr">
+        <button class="btn primary" id="btnAcceptProposal">保留为新图层</button>
+        <button class="btn" id="btnCancelPreview">放弃预览</button>
+      </div>
+    </div>` : '';
+  return `<div class="prop-grid">${cards}</div>${bar}
+    <div class="gen-note">点击方案在画布预览；接受后落为独立 AI 图层（可拖动 / 隐藏 / 删除 / 撤销）。</div>`;
+}
+
+function bindAiPanelEvents() {
+  const askBtn = $('btnAskAiPanel');
+  if (askBtn) askBtn.addEventListener('click', askAi);
+  const chk = $('chkIgnoreArchive');
+  if (chk) {
+    chk.checked = state.ignoreArchive;
+    chk.addEventListener('change', () => setIgnoreArchive(chk.checked));
+  }
+  document.querySelectorAll('[data-obs-confirm]').forEach(btn => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); decideObservation(btn.dataset.obsConfirm, 'confirm'); });
+  });
+  document.querySelectorAll('[data-obs-reject]').forEach(btn => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); decideObservation(btn.dataset.obsReject, 'reject'); });
+  });
+  document.querySelectorAll('[data-obs-revert]').forEach(btn => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); revertObservation(btn.dataset.obsRevert); });
+  });
+  document.querySelectorAll('[data-dir-id]').forEach(card => {
+    card.addEventListener('click', () => selectDirection(card.dataset.dirId));
+  });
+  const genBtn = $('btnGenProposals');
+  if (genBtn) genBtn.addEventListener('click', generateProposals);
+  const acceptBtn = $('btnAcceptProposal');
+  if (acceptBtn) acceptBtn.addEventListener('click', acceptProposal);
+  const cancelBtn = $('btnCancelPreview');
+  if (cancelBtn) cancelBtn.addEventListener('click', cancelProposalPreview);
+  document.querySelectorAll('[data-prop-id]').forEach(card => {
+    card.addEventListener('click', () => previewProposal(card.dataset.propId));
+  });
+  // 观察卡：hover / 点击 → 画布锚点高亮
+  document.querySelectorAll('.obs-card').forEach(card => {
+    card.addEventListener('mouseenter', () => { state.hoverObsId = card.dataset.obsId; renderOverlay(); });
+    card.addEventListener('mouseleave', () => { state.hoverObsId = null; renderOverlay(); });
+    card.addEventListener('click', () => {
+      const id = card.dataset.obsId;
+      state.highlightObsId = state.highlightObsId === id ? null : id;
+      renderAiPanel();
+      renderOverlay();
+    });
+  });
+  // 方案缩略图
+  document.querySelectorAll('[data-thumb-id]').forEach(cv => {
+    const p = state.proposals.find(x => x.id === cv.dataset.thumbId);
+    if (p) drawProposalThumb(cv, p.canvas);
+  });
+}
+
+function renderAiPanel() {
+  const el = dom.aiBody;
+  if (!el) return;
+
+  // 存证模式：AI 禁用
+  if (state.mode === 'evidence') {
+    el.innerHTML = `<div class="ai-disabled">
+      <div class="shield">⛨</div>
+      <h3>存证模式 · AI 已关闭</h3>
+      <p>当前作品不调用任何 AI 观察与生成。画布、图层、撤销照常可用；导出的证据包会带上<br><b>zero_generation + 零生成声明</b>。</p>
+    </div>
+    <div class="ai-note">想恢复 AI 协作：点顶栏「协作模式」。</div>`;
+    updateStatusBar();
+    return;
+  }
+
+  // 加载态
+  if (state.aiBusy && !state.observations.length) {
+    el.innerHTML = `<div class="progress-wrap">
+        <div class="progress-label"><span id="aiPhase">AI 正在看你的画…</span><span>MOCK</span></div>
+        <div class="progress"><i></i></div>
+      </div>
+      <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
+      <div class="gen-note">模拟 VLM 分析中：不调用真实模型、不上传画布、无网络请求。</div>`;
+    return;
+  }
+
+  // 空态
+  if (!state.observations.length) {
+    const selText = state.selection
+      ? `当前指认区域：${bboxArray(state.selection).join(' × ')}（宽 × 高）`
+      : '尚未框选：AI 将默认看画面中部';
+    el.innerHTML = `<div class="ai-intro">
+        <ol>
+          <li><span class="n">1</span>用「框选」在画布上圈出卡住的地方（零文字）</li>
+          <li><span class="n">2</span>点下面按钮，AI 基于你的档案给 2–4 条观察 + 2 个方向</li>
+          <li><span class="n">3</span>选方向 → 生成 2 个模拟方案 → 接受后落为新图层</li>
+        </ol>
+      </div>
+      <div class="gen-note" style="margin:-2px 0 9px">${selText}</div>
+      <button class="btn primary big" id="btnAskAiPanel">让 AI 看看</button>
+      <label class="switch"><input type="checkbox" id="chkIgnoreArchive" ${state.ignoreArchive ? 'checked' : ''}> 本次不参考我的档案（D4 · 跳出既有偏好）</label>
+      <div class="ai-note">⚠️ 所有 AI 结果为 <b>预置 Mock 数据</b>，没有调用任何模型；观察卡上的锚点、置信度、来源标记是演示交互。</div>`;
+    bindAiPanelEvents();
+    updateStatusBar();
+    return;
+  }
+
+  // 结果态
+  const obs = state.observations;
+  const lowCount = obs.filter(o => (o.confidence != null && o.confidence < 0.5)).length;
+  const rejectedConstraints = state.decisions.filter(d => d.kind === 'reject_ai').length;
+  const ctxLine = `${state.aiReview ? `指认 ${bboxArray(state.aiReview.selection).slice(2).join('×')}` : ''} · 参考档案 ${state.ignoreArchive ? '0（本次不参考）' : '14'} 条 · 模型 ${MOCK.models.vlm.name} · ${(state.aiReview?.latencyMs || MOCK.latency.observe)}ms（模拟）`;
+  el.innerHTML = `
+    ${state.ignoreArchive ? `<div class="statement warn" style="margin-bottom:9px">本次请求未参考你的档案（通用模式），以下基于通用审美。</div>` : ''}
+    <div class="src-legend">三态用「图标 + 文字 + 边框形状」区分，不只靠颜色：实线 = 可见事实 · 虚线 = AI 推断（不是事实） · 双线 = 你确认。</div>
+    <div class="gen-note" style="margin:0 0 8px">${ctxLine}</div>
+    <div class="obs-list">${obs.map(observationCardHtml).join('')}</div>
+    ${lowCount ? `<div class="statement warn" style="margin:0 0 10px">AI 对其中的 ${lowCount} 条没有把握，已标「待确认」；低置信不作为后续生成的硬约束。</div>` : ''}
+    <div class="section-title">方向候选 <span>选一个方向 → 生成模拟方案</span></div>
+    <div class="dir-list">${(state.aiReview?.directions || []).map(directionCardHtml).join('')}</div>
+    ${renderProposalZone()}
+    <div class="ai-note">${rejectedConstraints ? `已排除 ${rejectedConstraints} 条你否决过的约束 · ` : ''}以上均为 Mock：观察来自预置模板，方案来自 canvas 滤镜。</div>`;
+  bindAiPanelEvents();
+  updateStatusBar();
+}
+
+/* ---------- 观察确认 / 否决 ---------- */
+function decideObservation(obsId, action) {
+  const obs = state.observations.find(o => o.id === obsId);
+  if (!obs) return;
+  const shortText = obs.text.length > 22 ? obs.text.slice(0, 22) + '…' : obs.text;
+  if (action === 'confirm') {
+    if (obs.decision === 'confirmed') return;
+    obs.decision = 'confirmed';
+    obs.source = 'user-confirmed';
+    recordDecision({
+      kind: 'confirm_ai',
+      observation_id: obs.id,
+      layer: 'L5',
+      note: `确认观察「${shortText}」`,
+      created_by: 'user'
+    });
+    logEvent('archive_confirmed', { layer: 'L4', record_id: obs.id });
+    toast('已确认 · 写回决策记录，之后生成会参考这条', 'ok');
+  } else {
+    if (obs.decision === 'rejected') return;
+    obs.decision = 'rejected';
+    obs.source = 'rejected';
+    recordDecision({
+      kind: 'reject_ai',
+      observation_id: obs.id,
+      layer: 'L5',
+      note: `否决观察「${shortText}」`,
+      rationale: '用户点「不对」（未填理由）',
+      created_by: 'user'
+    });
+    logEvent('archive_rejected', { layer: 'L4', record_id: obs.id });
+    toast('已记录否决 · 后续生成会排除这条', 'warn');
+  }
+  renderAiPanel();
+  renderOverlay();
+}
+function revertObservation(obsId) {
+  const obs = state.observations.find(o => o.id === obsId);
+  if (!obs || !obs.decision) return;
+  const prev = obs.decision;
+  obs.decision = null;
+  obs.source = obs.originalSource;
+  recordDecision({
+    kind: prev === 'confirmed' ? 'revert_confirm' : 'revert_reject',
+    observation_id: obs.id,
+    note: `撤销${prev === 'confirmed' ? '确认' : '否决'}观察「${obs.id}」`,
+    created_by: 'user'
+  });
+  logEvent('archive_decision_reverted', { record_id: obs.id, decision: prev });
+  toast('已撤销这条决定（原决策仍保留在记录里）');
+  renderAiPanel();
+  renderOverlay();
+}
+
+/* ---------- 方向与模拟方案 ---------- */
+function selectDirection(id) {
+  if (state.aiBusy) return;
+  state.selectedDirectionId = id;
+  state.proposals = [];
+  state.previewProposalId = null;
+  state.committedProposalId = null;
+  logEvent('ai_direction_selected', { direction_id: id });
+  const d = state.aiReview?.directions.find(x => x.id === id);
+  if (d) setStatusHint(`已选方向「${d.title}」· 点「生成模拟方案」`);
+  renderAiPanel();
+  renderOverlay();
+}
+
+async function generateProposals() {
+  if (!state.selectedDirectionId || state.aiBusy) return;
+  const rowGen = logEvent('candidate_requested', { direction_id: state.selectedDirectionId, count: 2, has_archive: !state.ignoreArchive });
+  state.generating = true;
+  state.aiBusy = true;
+  state.proposals = [];
+  state.previewProposalId = null;
+  updateStatusBar();
+  renderAiPanel();
+  setStatusHint('正在生成模拟方案（canvas 滤镜）…');
+  const t0 = performance.now();
+  await sleep(MOCK.latency.generate);
+  const plans = MOCK.directionPlans[state.selectedDirectionId] || [];
+  state.proposals = plans.map((p, i) => createProposalCanvas(state.selectedDirectionId, p, i));
+  const latency = Math.round(performance.now() - t0);
+  state.generating = false;
+  state.aiBusy = false;
+  // 每个候选记一条 AI 生成事件（初始 accepted=false，接受后会更新）
+  state.proposals.forEach(p => {
+    const ev = logAiEvent({
+      kind: 'generation',
+      model: MOCK.models.image,
+      note: '模拟生成：canvas 滤镜 + 色块，未调用图像模型',
+      mode_at_request: state.mode,
+      params: {
+        direction_id: state.selectedDirectionId,
+        filter: p.filter,
+        overlay: p.overlay,
+        mask: bboxArray(p.rect),
+        base_selection: bboxArray(state.selection)
+      },
+      input_refs: [state.selectedDirectionId, 'L1-a7', 'L2-a7-001'],
+      output_asset_id: p.id,
+      accepted: false,
+      accepted_at: null,
+      cost: '0 元（Mock）',
+      latency_ms: Math.round(latency / Math.max(1, plans.length))
+    });
+    p.generationId = ev.id;
+  });
+  logEvent('candidate_shown', { count: state.proposals.length, latency_ms: latency, mock: true });
+  setStatusHint('模拟方案已生成 · 点击方案在画布预览');
+  renderAiPanel();
+  showCanvasToast('2 个模拟方案已生成（canvas 滤镜）· 点击卡片预览', 3000);
+}
+
+/* 用 canvas 滤镜 + 色块生成"模拟方案"，不调用任何模型 */
+function createProposalCanvas(directionId, plan, index) {
+  const sel = state.selection || defaultSelectionRect();
+  // 外扩一点，模拟局部重绘的羽化范围
+  const pad = 14;
+  const rect = {
+    x: clamp(Math.floor(sel.x - pad), 0, DOC_W),
+    y: clamp(Math.floor(sel.y - pad), 0, DOC_H),
+    w: 0, h: 0
+  };
+  rect.w = clamp(Math.ceil(sel.w + pad * 2), 1, DOC_W - rect.x);
+  rect.h = clamp(Math.ceil(sel.h + pad * 2), 1, DOC_H - rect.y);
+
+  const cv = document.createElement('canvas');
+  cv.width = rect.w; cv.height = rect.h;
+  const ctx = cv.getContext('2d');
+
+  // 1) 取当前合成图的区域
+  renderComposite(scratchCtx);
+  ctx.save();
+  ctx.filter = plan.filter;
+  ctx.drawImage(scratch, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+  ctx.restore();
+
+  // 2) 叠加色块（暖光 / 冷调 / 雾气 / 暗角）—— "AI 给的局部方案"的示意
+  ctx.save();
+  ctx.globalCompositeOperation = 'source-over';
+  if (plan.overlay === 'warm') {
+    const g = ctx.createLinearGradient(rect.w, 0, 0, rect.h);
+    g.addColorStop(0, 'rgba(255,186,110,.30)');
+    g.addColorStop(0.55, 'rgba(255,170,90,.10)');
+    g.addColorStop(1, 'rgba(255,170,90,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, rect.w, rect.h);
+    // 边界提亮条（对应方向「让边界更清楚」）
+    const bg = ctx.createLinearGradient(0, rect.h * 0.62, 0, rect.h);
+    bg.addColorStop(0, 'rgba(190,225,240,0)');
+    bg.addColorStop(0.5, 'rgba(200,232,245,.22)');
+    bg.addColorStop(1, 'rgba(200,232,245,0)');
+    ctx.fillStyle = bg; ctx.fillRect(0, rect.h * 0.6, rect.w, rect.h * 0.4);
+  } else if (plan.overlay === 'cool') {
+    const g = ctx.createLinearGradient(0, 0, rect.w, rect.h);
+    g.addColorStop(0, 'rgba(56,130,190,.24)');
+    g.addColorStop(1, 'rgba(20,60,90,.10)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, rect.w, rect.h);
+    ctx.globalCompositeOperation = 'multiply';
+    const d = ctx.createLinearGradient(0, 0, 0, rect.h);
+    d.addColorStop(0, 'rgba(255,255,255,1)');
+    d.addColorStop(1, 'rgba(120,150,170,1)');
+    ctx.fillStyle = d; ctx.fillRect(0, 0, rect.w, rect.h);
+  } else if (plan.overlay === 'mist') {
+    const g = ctx.createLinearGradient(0, 0, 0, rect.h);
+    g.addColorStop(0, 'rgba(200,225,235,0)');
+    g.addColorStop(0.55, 'rgba(200,225,235,.20)');
+    g.addColorStop(1, 'rgba(200,225,235,.02)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, rect.w, rect.h);
+  } else if (plan.overlay === 'vignette') {
+    const g = ctx.createRadialGradient(rect.w / 2, rect.h / 2, Math.min(rect.w, rect.h) * 0.2, rect.w / 2, rect.h / 2, Math.max(rect.w, rect.h) * 0.7);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(0,8,14,.42)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, rect.w, rect.h);
+  }
+  ctx.restore();
+
+  // 3) 边缘羽化：destination-in 用一个模糊矩形蒙版，模拟局部重绘的接缝
+  const mask = document.createElement('canvas');
+  mask.width = rect.w; mask.height = rect.h;
+  const mctx = mask.getContext('2d');
+  mctx.filter = 'blur(10px)';
+  mctx.fillStyle = '#fff';
+  mctx.fillRect(5, 5, rect.w - 10, rect.h - 10);
+  // 再削一点点角，避免生硬
+  mctx.globalCompositeOperation = 'destination-in';
+  mctx.filter = 'none';
+  mctx.fillStyle = 'rgba(255,255,255,1)';
+  mctx.fillRect(0, 0, rect.w, rect.h);
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-in';
+  ctx.drawImage(mask, 0, 0);
+  ctx.restore();
+
+  return {
+    id: 'prop-' + state.proposals.length + '-' + index + '-' + Date.now().toString(36),
+    title: plan.title,
+    filter: plan.filter,
+    overlay: plan.overlay,
+    note: plan.note,
+    lowConfidence: !!plan.lowConfidence,
+    directionId,
+    rect,
+    canvas: cv,
+    generationId: null
+  };
+}
+
+function drawProposalThumb(canvasEl, srcCanvas) {
+  const ctx = canvasEl.getContext('2d');
+  const cw = canvasEl.width, ch = canvasEl.height;
+  ctx.clearRect(0, 0, cw, ch);
+  const s = Math.max(cw / srcCanvas.width, ch / srcCanvas.height);
+  const w = srcCanvas.width * s, h = srcCanvas.height * s;
+  ctx.drawImage(srcCanvas, (cw - w) / 2, (ch - h) / 2, w, h);
+}
+
+/* ---------- 预览 / 落盘 ---------- */
+function previewProposal(propId) {
+  if (state.mode === 'evidence') return;
+  const p = state.proposals.find(x => x.id === propId);
+  if (!p) return;
+  state.previewProposalId = propId;
+  logEvent('candidate_previewed', { proposal_id: propId, direction_id: state.selectedDirectionId });
+  renderAiPanel();
+  renderOverlay();
+  setStatusHint('正在预览模拟方案 · 点「保留为新图层」落盘，或「放弃预览」');
+  showCanvasToast('画布上为预览（虚线框），像素尚未落盘', 2800);
+}
+function cancelProposalPreview() {
+  if (!state.previewProposalId) return;
+  const id = state.previewProposalId;
+  state.previewProposalId = null;
+  logEvent('candidate_preview_cancelled', { proposal_id: id });
+  renderAiPanel();
+  renderOverlay();
+  setStatusHint('已放弃预览 · 画布像素未改变');
+}
+
+async function acceptProposal() {
+  if (state.mode === 'evidence') { toast('存证模式下不能落 AI 图层', 'warn'); return; }
+  const p = state.proposals.find(x => x.id === state.previewProposalId);
+  if (!p) return;
+  // 落为新图层（只在矩形区域内绘制，天然带 mask）
+  const layer = makeLayer('AI · ' + (state.aiReview?.directions.find(d => d.id === p.directionId)?.short || '方案') + ' · ' + fmtDateTime(new Date()).slice(5), 'ai', {
+    bbox: { ...p.rect },
+    aiMeta: { proposalId: p.id, directionId: p.directionId, generationId: p.generationId, filter: p.filter }
+  });
+  layer.ctx.drawImage(p.canvas, p.rect.x, p.rect.y);
+  state.layers.push(layer);
+  state.activeLayerId = layer.id;
+
+  // 历史（落盘 = 一步可撤销）
+  pushHistory(makeActionHistory(
+    () => { state.layers = state.layers.filter(l => l.id !== layer.id); renderAll(); },
+    () => { state.layers.push(layer); state.activeLayerId = layer.id; renderAll(); },
+    '落盘 AI 图层'
+  ));
+
+  // L6 生成事件：标记被接受
+  const ev = state.aiEvents.find(e => e.id === p.generationId);
+  if (ev) { ev.accepted = true; ev.accepted_at = nowIso(); ev.output_layer_id = layer.id; }
+  // L5 决策记录
+  recordDecision({
+    kind: 'accept_ai',
+    layer_id: layer.id,
+    proposal_id: p.id,
+    generation_id: p.generationId,
+    note: `接受模拟方案「${p.title}」并落为新图层`,
+    created_by: 'user'
+  });
+  logEvent('ai_layer_committed', {
+    layer_id: layer.id,
+    layer_name: layer.name,
+    proposal_id: p.id,
+    direction_id: p.directionId,
+    generation_id: p.generationId
+  });
+  state.committedProposalId = p.id;
+  state.previewProposalId = null;
+  setTool('move');
+  renderAll();
+  renderAiPanel();
+  toast('已落为新图层「' + layer.name + '」· 一步可撤销，可拖动/隐藏/删除', 'ok', 3400);
+  setStatusHint('AI 图层已落盘 · 用「移动」工具可拖动它');
+  showCanvasToast('已落为新图层 · 可用「移动」工具拖动，或 Ctrl+Z 撤销', 3400);
+}
+
+function setIgnoreArchive(on) {
+  state.ignoreArchive = !!on;
+  const btn = $('btnIgnoreArchive');
+  if (btn) btn.classList.toggle('active-ignore', state.ignoreArchive);
+  renderAiPanel();
+  toast(state.ignoreArchive ? '本次请求将不参考你的档案（通用模式）' : '已恢复参考你的档案');
+}
+
+/* ---------- 存证模式 ---------- */
+function setMode(mode) {
+  if (mode !== 'collab' && mode !== 'evidence') return;
+  if (state.mode === mode) return;
+  state.mode = mode;
+  state.modeStartedAt = nowIso();
+  if (mode === 'evidence') {
+    state.generating = false;
+    state.aiBusy = false;
+    state.previewProposalId = null;
+    state.highlightObsId = null;
+    logEvent('mode_change', { from: 'collab', to: 'evidence', note: '存证模式：不调用 AI 生成' });
+    recordDecision({ kind: 'mode_change', note: '切换到存证模式（不调用生成模型）', created_by: 'user' });
+    toast('已进入存证模式 · AI 已禁用，证据包将显示零生成', 'ok', 3200);
+    setStatusHint('存证模式 · AI 已禁用 · 画布照常可用');
+  } else {
+    logEvent('mode_change', { from: 'evidence', to: 'collab', note: '协作模式：允许 AI 局部方案' });
+    recordDecision({ kind: 'mode_change', note: '切换到协作模式', created_by: 'user' });
+    toast('已切回协作模式 · 可继续「让 AI 看看」');
+    setStatusHint('协作模式 · AI 可参与局部方案');
+  }
+  document.querySelectorAll('.mode-opt').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  $('statusModeText').textContent = mode === 'evidence'
+    ? '存证模式 · AI 已关闭 · 证据包零生成'
+    : '协作模式 · AI 可参与局部方案';
+  const ask = $('btnAskAi');
+  if (ask) { ask.disabled = mode === 'evidence'; ask.title = mode === 'evidence' ? '存证模式下 AI 已禁用' : '框选区域后让 AI 看看（快捷键 K）'; }
+  renderAiPanel();
+  renderOverlay();
+  updateStatusBar();
+  layoutCanvas();
+}
+/* =========================================================================
+   PART G · 档案记录弹层 / 证据包导出 / 导入图片 / 初始化与事件绑定
+   ========================================================================= */
+
+/* ---------- 档案记录弹层（L4 观察 + L5 决策） ---------- */
+function openArchiveModal() {
+  renderArchiveBody();
+  dom.archiveModal.classList.add('open');
+}
+function renderArchiveBody() {
+  const obs = state.observations;
+  const decisions = [...state.decisions].reverse();
+  const confirmed = obs.filter(o => o.decision === 'confirmed').length;
+  const rejected = obs.filter(o => o.decision === 'rejected').length;
+
+  const obsHtml = obs.length ? obs.map(o => {
+    const decided = o.decision === 'confirmed' ? '已确认' : (o.decision === 'rejected' ? '已否决' : '待处理');
+    const cls = o.decision === 'confirmed' ? 'accept' : (o.decision === 'rejected' ? 'reject' : '');
+    return `<div class="arch-item">
+      <div>${sourceBadge(o.source)} <span class="kind-pill ${cls}">${decided}</span></div>
+      <div style="margin-top:5px">${escapeHtml(o.text)}</div>
+      <div class="meta"><span>${o.id}</span><span>置信度 ${o.confidence == null ? '—' : Math.round(o.confidence * 100) + '%'}</span><span>${escapeHtml(o.evidence.map(e => e.k).join(' · '))}</span></div>
+    </div>`;
+  }).join('') : `<div class="arch-empty">还没有 AI 观察。先在画布上框选一块区域，点「让 AI 看看」。</div>`;
+
+  const kindLabel = {
+    accept_ai: '接受 AI 方案', reject_ai: '否决 AI 观察', confirm_ai: '确认 AI 观察',
+    revert_reject: '撤销否决', revert_confirm: '撤销确认', delete_ai_layer: '删除 AI 图层',
+    mode_change: '模式切换'
+  };
+  const decisionsHtml = decisions.length ? decisions.map(d => {
+    const cls = d.kind === 'reject_ai' ? 'reject' : (d.kind === 'accept_ai' || d.kind === 'confirm_ai' ? 'accept' : '');
+    return `<div class="arch-item">
+      <span class="kind-pill ${cls}">${kindLabel[d.kind] || d.kind}</span>
+      <span style="margin-left:6px;color:#cbd5e1">${escapeHtml(d.note)}</span>
+      <div class="meta"><span>${d.id}</span><span>${fmtTime(d.ts)}</span><span>${d.mode === 'evidence' ? '存证模式' : '协作模式'}</span>${d.observation_id ? `<span>${d.observation_id}</span>` : ''}</div>
+    </div>`;
+  }).join('') : `<div class="arch-empty">还没有决策记录。确认或否决一条 AI 观察后，这里会出现 L5 记录。</div>`;
+
+  dom.archiveBody.innerHTML = `
+    <div class="statement" style="margin-bottom:14px">
+      档案 = AI 写观察（L4，只读原话）+ 你的决策（L5，可确认/可否决/可撤销）。两栏分表存储，AI 不能直接改写你确认过的内容；
+      你的否决会写回并在后续生成中被排除。
+    </div>
+    <div class="arch-grid">
+      <div class="arch-col">
+        <h3>AI 观察（L4）<span class="num">${obs.length}</span><span style="font-size:10.5px;color:#64748b">已确认 ${confirmed} · 已否决 ${rejected}</span></h3>
+        ${obsHtml}
+      </div>
+      <div class="arch-col">
+        <h3>决策记录（L5）<span class="num">${state.decisions.length}</span></h3>
+        ${decisionsHtml}
+      </div>
+    </div>`;
+}
+
+/* ---------- 证据包：构建 JSON（含时间线 / AI 事件 / 哈希 / manifest / 零生成） ---------- */
+async function buildEvidencePackage() {
+  renderCanvas(); // 保证画布合成是最新的
+  const now = new Date();
+  const modeStarted = new Date(state.modeStartedAt);
+  const pngBuf = await canvasToArrayBuffer(dom.mainCanvas);
+  const canvasHash = await hashBytes(pngBuf);
+
+  const layerEntries = [];
+  for (const layer of state.layers) {
+    const buf = await canvasToArrayBuffer(layer.canvas);
+    layerEntries.push({
+      id: layer.id,
+      name: layer.name,
+      kind: layer.kind,
+      visible: layer.visible,
+      opacity: layer.opacity,
+      offset: { ...layer.offset },
+      bbox: layer.bbox,
+      created_at: layer.created_at,
+      sha256: await hashBytes(buf),
+      png_bytes: buf.byteLength,
+      ai_generation_id: layer.aiMeta?.generationId || null,
+      file: `layers/${layer.id}.png`
+    });
+  }
+
+  const timeline = state.events.map(e => JSON.parse(JSON.stringify(e)));
+  const aiEvents = state.aiEvents.map(e => JSON.parse(JSON.stringify(e)));
+  const modeTimeline = timeline.filter(e => e.kind === 'mode_change').map(e => ({ ts: e.ts, ...e.detail }));
+  const crit = aiEvents.filter(e => e.kind === 'critique');
+  const gens = aiEvents.filter(e => e.kind === 'generation');
+  const acceptedGens = gens.filter(e => e.accepted);
+  const afterSwitch = aiEvents.filter(e => new Date(e.ts) >= modeStarted);
+  const genAfterSwitch = afterSwitch.filter(e => e.kind === 'generation');
+  const aiAfterSwitch = afterSwitch;
+  const zeroGeneration = state.mode === 'evidence' && genAfterSwitch.length === 0;
+  const zeroAiActivity = state.mode === 'evidence' && aiAfterSwitch.length === 0;
+  const humanStrokes = timeline.filter(e => e.kind === 'stroke').length;
+
+  const manifest = {
+    tool: { name: '墨证 InkProof · 本地 Demo', version: APP_VERSION, form: 'single-file offline HTML', mock: true },
+    generated_at: now.toISOString(),
+    schema_version: 'demo-evidence-0.1',
+    integrity_scope: '本 demo 导出 JSON + canvas.png 两个文件；manifest 列出画布与各图层 PNG 的 SHA-256，供逐项核对',
+    hashing: {
+      algorithm: HASH.algorithm,
+      backend: HASH.backend,
+      available: HASH.available,
+      note: HASH.available
+        ? '使用浏览器原生 WebCrypto 计算 SHA-256'
+        : 'WebCrypto 不可用，已降级为 FNV-1a-64（仅演示，不等价于 SHA-256）'
+    },
+    files: [
+      { path: 'canvas.png', kind: 'canvas', sha256: canvasHash, bytes: pngBuf.byteLength },
+      ...layerEntries.map(l => ({ path: l.file, kind: 'layer', layer_id: l.id, name: l.name, sha256: l.sha256, bytes: l.png_bytes }))
+    ],
+    timeline_event_count: timeline.length,
+    ai_event_count: aiEvents.length,
+    ai_event_integrity: 'AI 事件清单不可隐藏；本包记录本作品内的全部 AI 参与事件（含失败/否决）',
+    mode: state.mode,
+    zero_generation: zeroGeneration,
+    generation_events_in_scope: genAfterSwitch.length
+  };
+
+  const pkg = {
+    schema_version: 'demo-evidence-0.1',
+    app: {
+      name: '墨证 InkProof',
+      subtitle: '创作记忆与过程证据层',
+      version: APP_VERSION,
+      demo: true,
+      mock: true,
+      network: '无网络请求（完全离线单文件）',
+      generated_at: now.toISOString()
+    },
+    exported_at: now.toISOString(),
+    mode: state.mode,
+    mode_label: state.mode === 'evidence' ? '存证模式' : '协作模式',
+    zero_generation: zeroGeneration,
+    zero_ai_activity: zeroAiActivity,
+    scope: {
+      work: '《雾中山谷》',
+      canvas: { width: DOC_W, height: DOC_H },
+      layer_count: state.layers.length,
+      mode_timeline: modeTimeline,
+      session_started_at: timeline.length ? timeline[0].ts : now.toISOString()
+    },
+    canvas: {
+      file: 'canvas.png',
+      sha256: canvasHash,
+      bytes: pngBuf.byteLength,
+      width: DOC_W,
+      height: DOC_H
+    },
+    layers: layerEntries,
+    summary: {
+      human_stroke_events: humanStrokes,
+      human_decision_events: state.decisions.length,
+      ai_critique_events: crit.length,
+      ai_generation_events: gens.length,
+      ai_generation_accepted: acceptedGens.length,
+      ai_events_total: aiEvents.length,
+      zero_generation: zeroGeneration
+    },
+    timeline,
+    ai_events: aiEvents,
+    archive: {
+      observations: state.observations.map(o => ({
+        id: o.id,
+        source: o.source,
+        original_source: o.originalSource,
+        confidence: o.confidence,
+        anchor: { type: 'bbox', value: bboxArray(o.anchorRect) },
+        text: o.text,
+        evidence: o.evidence,
+        user_decision: o.decision
+      })),
+      decisions: state.decisions.map(d => JSON.parse(JSON.stringify(d)))
+    },
+    manifest,
+    no_generation_attestation: {
+      active: state.mode === 'evidence',
+      scope: { from: state.modeStartedAt, to: now.toISOString() },
+      generation_calls_in_scope: genAfterSwitch.length,
+      ai_events_in_scope: aiAfterSwitch.length,
+      statement: state.mode === 'evidence'
+        ? '本作品自进入存证模式起，未调用任何生成模型（本 Demo 全程无真实模型调用；观察与方案均为 Mock）。'
+        : '当前为协作模式，不做零生成声明；全部 AI 事件见 ai_events（不可隐藏）。',
+      disclaimer: '本证据包不证明创作者未在其他工具或平台上使用 AI，也不构成法律意义上的作者身份证明；MVP 版本无第三方时间戳与数字签名。'
+    },
+    c2pa_like: {
+      note: '字段结构对齐 C2PA 草稿，本 Demo 不签名、不做第三方时间戳验证',
+      claim_generator: `墨证 InkProof Demo ${APP_VERSION}`,
+      assertions: [
+        { label: 'inkproof.mode', data: { mode: state.mode, zero_generation: zeroGeneration, mode_started_at: state.modeStartedAt } },
+        { label: 'inkproof.ai_events', data: { count: aiEvents.length, hidden: false } },
+        {
+          label: 'c2pa.actions',
+          data: {
+            actions: timeline.slice(-24).map(e => ({
+              action: e.kind === 'stroke' ? 'c2pa.edited' : (e.kind === 'ai_layer_committed' ? 'c2pa.placed' : (e.kind === 'example_loaded' ? 'c2pa.created' : 'inkproof.' + e.kind)),
+              when: e.ts,
+              softwareAgent: '墨证 InkProof Demo'
+            }))
+          }
+        }
+      ]
+    },
+    readme: [
+      '本证据包记录了作品在本工具内的创作过程：哪些操作由人完成、AI 在哪些步骤参与、每次生成用了哪些素材与档案。',
+      '它不能证明创作者没有使用其他工具，也不构成法律意义上的作者身份证明（本 Demo 版本无第三方时间戳 / 签名）。',
+      `本作品模式：${state.mode === 'evidence' ? '存证模式（no_generation_attestation：创作期未调用生成模型）' : '协作模式（包含 AI 参与事件）'}。`,
+      '校验方法：对导出的 canvas.png 计算 SHA-256，与 manifest.files 中 canvas.png 的 sha256 比对。',
+      '⚠️ 本 Demo 的所有 AI 能力均为 Mock（预置数据 + canvas 滤镜），不调用任何真实模型；此包仅用于演示产品形态。'
+    ].join('\n')
+  };
+  return pkg;
+}
+
+function evidenceBodyHtml(pkg) {
+  const backend = pkg.manifest.hashing;
+  const layerRows = pkg.manifest.files.filter(f => f.kind === 'layer').map(f => `
+    <div class="hash-row">
+      <div><span style="color:#93a9c4">${escapeHtml(f.path)}</span> <span style="color:#5f7692">· ${f.bytes} bytes${f.name ? ' · ' + escapeHtml(f.name) : ''}</span></div>
+      <div class="h">${f.sha256}</div>
+    </div>`).join('');
+  const genBadge = pkg.zero_generation
+    ? `<span class="src-badge user-confirmed" style="font-size:11px">✓ 零 AI 生成（零生成声明已写入）</span>`
+    : `<span class="src-badge inferred" style="font-size:11px">◇ 含 AI 生成事件（如实记录）</span>`;
+  const att = pkg.no_generation_attestation;
+  return `
+    <div class="stat-grid">
+      <div class="stat"><div class="k">作品模式</div><div class="v">${pkg.mode_label}</div></div>
+      <div class="stat"><div class="k">时间线事件</div><div class="v">${pkg.timeline.length}</div></div>
+      <div class="stat"><div class="k">AI 事件（不可隐藏）</div><div class="v">${pkg.ai_events.length}</div></div>
+      <div class="stat"><div class="k">零生成标记 zero_generation</div><div class="v ${pkg.zero_generation ? 'good' : 'warn'}">${pkg.zero_generation ? 'true' : 'false'}</div></div>
+      <div class="stat"><div class="k">图层数</div><div class="v">${pkg.layers.length}</div></div>
+      <div class="stat"><div class="k">人类笔触事件</div><div class="v">${pkg.summary.human_stroke_events}</div></div>
+      <div class="stat"><div class="k">AI 观察 / 生成次数</div><div class="v">${pkg.summary.ai_critique_events} / ${pkg.summary.ai_generation_events}</div></div>
+      <div class="stat"><div class="k">哈希后端</div><div class="v" style="font-size:12px">${backend.available ? 'SHA-256' : '降级 FNV-1a-64'}</div></div>
+    </div>
+
+    <div class="ev-block">
+      <h3>零生成 / 参与范围声明 <span class="hint">${pkg.mode_label}</span></h3>
+      <div class="statement ${pkg.zero_generation ? '' : 'warn'}">${genBadge}<br><br>
+        <b>声明：</b>${escapeHtml(att.statement)}<br>
+        <b>范围：</b>${fmtTime(att.scope.from)} → ${fmtTime(att.scope.to)}（进入${pkg.mode_label}之后）<br>
+        <b>不承诺：</b>${escapeHtml(att.disclaimer)}
+      </div>
+    </div>
+
+    <div class="ev-block">
+      <h3>文件完整性（可以用任何 SHA-256 工具复核） <span class="hint">${backend.backend}</span></h3>
+      <div class="hash-row" style="margin-bottom:6px">
+        <div><span style="color:#93a9c4">canvas.png</span> <span style="color:#5f7692">· ${pkg.canvas.bytes} bytes（当前画布）</span></div>
+        <div class="h" style="color:#7dd3fc">${pkg.canvas.sha256}</div>
+        <div style="color:#5f7692;font-size:10.5px">${backend.available ? 'SHA-256 · WebCrypto 原生计算' : backend.note}</div>
+      </div>
+      ${layerRows}
+    </div>
+
+    <div class="ev-block">
+      <h3>manifest.json 预览 <span class="hint">包含哈希、时间戳、AI 事件清单、模式与零生成标记</span></h3>
+      <pre class="manifest-pre">${escapeHtml(JSON.stringify(pkg.manifest, null, 2))}</pre>
+    </div>
+
+    <div class="ev-block">
+      <h3>本证据包能证明什么 / 不能证明什么 <span class="hint">诚实边界</span></h3>
+      <div class="statement warn">
+        <b>能证明：</b>本作品在本工具内的操作时间线；哪些笔触由人完成；AI 在哪些步骤参与、用了哪个（模拟）模型、引用了哪些档案；导出时画布与图层的 SHA-256 指纹。<br>
+        <b>不能证明：</b>创作者没有在其他工具中使用 AI；跳过本工具的操作；法律意义上的作者身份（无第三方时间戳/签名）。<br>
+        <b>本 Demo：</b>AI 全部为 Mock，哈希与时间线为真实本地计算。
+      </div>
+    </div>`;
+}
+
+async function openEvidenceModal() {
+  dom.evidenceModal.classList.add('open');
+  dom.evidenceBody.innerHTML = `<div class="progress-wrap">
+      <div class="progress-label"><span>正在计算画布与各图层 SHA-256、整理时间线…</span><span>本地计算</span></div>
+      <div class="progress"><i></i></div>
+    </div>`;
+  try {
+    const pkg = await buildEvidencePackage();
+    state._evidencePackage = pkg;
+    dom.evidenceBody.innerHTML = evidenceBodyHtml(pkg);
+    logEvent('evidence_previewed', {
+      timeline_events: pkg.timeline.length,
+      ai_events: pkg.ai_events.length,
+      zero_generation: pkg.zero_generation,
+      hashing_backend: pkg.manifest.hashing.backend
+    });
+  } catch (err) {
+    console.error(err);
+    dom.evidenceBody.innerHTML = `<div class="statement warn">生成证据包失败：${escapeHtml(err.message || String(err))}</div>`;
+  }
+}
+
+async function doDownloadJson() {
+  let pkg = state._evidencePackage;
+  if (!pkg) { pkg = await buildEvidencePackage(); state._evidencePackage = pkg; }
+  logEvent('evidence_exported', {
+    format: 'json',
+    canvas_sha256: pkg.canvas.sha256,
+    zero_generation: pkg.zero_generation,
+    hashing_backend: pkg.manifest.hashing.backend
+  });
+  const json = JSON.stringify(pkg, null, 2);
+  downloadBlob(`证据包_墨证InkProof_${fileStamp()}.json`, new Blob([json], { type: 'application/json;charset=utf-8' }));
+  toast('证据包 JSON 已下载（含 manifest 与 SHA-256）', 'ok', 3200);
+  return pkg;
+}
+async function doDownloadPng() {
+  logEvent('canvas_png_exported', { width: DOC_W, height: DOC_H });
+  await downloadCanvasPng(`画布_墨证InkProof_${fileStamp()}.png`);
+  toast('当前画布 PNG 已下载', 'ok');
+}
+async function doDownloadBoth() {
+  await doDownloadJson();
+  await sleep(350);
+  await doDownloadPng();
+}
+
+/* ---------- 导入本地图片（作为新图层） ---------- */
+function importLocalImage(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const shortName = file.name.length > 18 ? file.name.slice(0, 16) + '…' : file.name;
+      const layer = makeLayer('导入 · ' + shortName, 'user');
+      // 等比 contain 居中绘制
+      const s = Math.min(DOC_W / img.width, DOC_H / img.height);
+      const w = img.width * s, h = img.height * s;
+      layer.ctx.drawImage(img, (DOC_W - w) / 2, (DOC_H - h) / 2, w, h);
+      state.layers.push(layer);
+      state.activeLayerId = layer.id;
+      pushHistory(makeActionHistory(
+        () => { state.layers = state.layers.filter(l => l.id !== layer.id); renderAll(); },
+        () => { state.layers.push(layer); state.activeLayerId = layer.id; renderAll(); },
+        '导入图片'
+      ));
+      logEvent('image_imported', {
+        file_name: file.name,
+        file_size: file.size,
+        image: { width: img.width, height: img.height },
+        layer_id: layer.id,
+        local_only: true
+      });
+      renderAll();
+      setStatusHint(`已导入「${shortName}」为新图层（可在图层面板调整顺序/透明度）`);
+      toast('图片已导入为新图层（本地读取，不上传）', 'ok');
+    };
+    img.onerror = () => toast('图片读取失败，请换一张试试', 'warn');
+    img.src = reader.result;
+  };
+  reader.onerror = () => toast('文件读取失败', 'warn');
+  reader.readAsDataURL(file);
+}
+
+/* ---------- 键盘快捷键 ---------- */
+function onKeyDown(e) {
+  const tag = (e.target && e.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+    if (e.key === 'Escape') e.target.blur();
+    return;
+  }
+  const modalOpen = document.querySelector('.modal-mask.open');
+  if (e.key === 'Escape') {
+    if (modalOpen) { modalOpen.classList.remove('open'); return; }
+    if (state.previewProposalId) { cancelProposalPreview(); return; }
+    if (state.selection) { state.selection = null; renderOverlay(); setStatusHint('已清除指认区域'); return; }
+    return;
+  }
+  if (modalOpen) return;
+  const k = e.key.toLowerCase();
+  if ((e.ctrlKey || e.metaKey) && k === 'z') {
+    e.preventDefault();
+    if (e.shiftKey) redoAction(); else undoAction();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && k === 'y') { e.preventDefault(); redoAction(); return; }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  switch (k) {
+    case 'k': e.preventDefault(); askAi(); break;
+    case 'b': setTool('brush-hard'); break;
+    case 'n': setTool('brush-soft'); break;
+    case 'e': setTool('eraser'); break;
+    case 'r': setTool('select'); break;
+    case 'm': setTool('move'); break;
+    default: break;
+  }
+}
+
+/* ---------- 初始化 ---------- */
+/* ---------- 内联 SVG 图标（Lucide 风格，ISC；无外部依赖） ---------- */
+const ICON_SVG = {
+  pen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>',
+  brush: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/></svg>',
+  eraser: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>',
+  select: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M21 19a2 2 0 0 1-2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h1"/><path d="M14 3h1"/><path d="M14 21h1"/><path d="M3 9v1"/><path d="M21 9v1"/><path d="M3 14v1"/><path d="M21 14v1"/></svg>',
+  move: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="22"/></svg>',
+  undo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>',
+  redo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>',
+  sparkles: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>',
+  'archive-off': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m2 2 20 20"/><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>',
+  image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>',
+  'image-plus': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 5h6"/><path d="M19 2v6"/><path d="M21 11.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7.5"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>',
+  archive: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>',
+  eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>',
+  'eye-off': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
+  diamond: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 3 12l9 9 9-9-9-9Z"/></svg>'
+};
+function applyIcons(root) {
+  (root || document).querySelectorAll('[data-icon]').forEach(el => {
+    const name = el.dataset.icon;
+    if (ICON_SVG[name]) el.innerHTML = ICON_SVG[name];
+  });
+}
+function srcIconHtml(source) {
+  const map = { observed: 'eye', inferred: 'diamond', 'user-confirmed': 'check', rejected: 'x' };
+  return ICON_SVG[map[source]] || '';
+}
+
+const SWATCHES = ['#e8d7a8', '#f2b880', '#e26d5c', '#7fb7a3', '#5b8fb9', '#2f6f8f', '#c9b6e4', '#f5f0e6', '#94a3b8', '#ffffff'];
+
+function buildSwatches() {
+  dom.swatches.innerHTML = '';
+  SWATCHES.forEach((color, i) => {
+    const b = document.createElement('button');
+    b.className = 'swatch' + (i === 0 ? ' active' : '');
+    b.style.background = color;
+    b.dataset.color = color;
+    b.title = color;
+    b.addEventListener('click', () => setColor(color));
+    dom.swatches.append(b);
+  });
+}
+
+function bindUi() {
+  document.querySelectorAll('[data-tool]').forEach(btn => {
+    btn.addEventListener('click', () => setTool(btn.dataset.tool));
+  });
+  dom.colorInput.addEventListener('input', () => setColor(dom.colorInput.value));
+  dom.sizeRange.addEventListener('input', () => setSize(Number(dom.sizeRange.value)));
+  $('btnUndo').addEventListener('click', undoAction);
+  $('btnRedo').addEventListener('click', redoAction);
+
+  $('btnAddLayer').addEventListener('click', addUserLayer);
+  $('btnCollapseLayers').addEventListener('click', () => toggleLayersPanel());
+  $('btnLayerUp').addEventListener('click', () => moveLayer(1));
+  $('btnLayerDown').addEventListener('click', () => moveLayer(-1));
+  $('btnLayerDelete').addEventListener('click', deleteActiveLayer);
+  dom.layerOpacity.addEventListener('input', () => setLayerOpacityFromSlider(true));
+  dom.layerOpacity.addEventListener('change', () => setLayerOpacityFromSlider(false));
+
+  $('btnLoadExample').addEventListener('click', () => loadExampleArtwork());
+  $('btnImportImage').addEventListener('click', () => dom.fileInput.click());
+  dom.fileInput.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    importLocalImage(file);
+    e.target.value = '';
+  });
+  $('btnArchive').addEventListener('click', openArchiveModal);
+  $('btnEvidence').addEventListener('click', openEvidenceModal);
+  $('btnAskAi').addEventListener('click', askAi);
+  $('btnIgnoreArchive').addEventListener('click', () => setIgnoreArchive(!state.ignoreArchive));
+  document.querySelectorAll('.mode-opt').forEach(btn => {
+    btn.addEventListener('click', () => setMode(btn.dataset.mode));
+  });
+
+  // 弹层关闭
+  document.querySelectorAll('[data-close]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.close;
+      $(id)?.classList.remove('open');
+    });
+  });
+  [dom.archiveModal, dom.evidenceModal].forEach(mask => {
+    mask.addEventListener('click', (e) => { if (e.target === mask) mask.classList.remove('open'); });
+  });
+
+  // 证据包下载
+  $('btnDownloadJson').addEventListener('click', doDownloadJson);
+  $('btnDownloadPng').addEventListener('click', doDownloadPng);
+  $('btnExportBoth').addEventListener('click', doDownloadBoth);
+
+  // 画布指针事件
+  dom.mainCanvas.addEventListener('pointerdown', onPointerDown);
+  window.addEventListener('pointermove', onPointerMove, { passive: false });
+  window.addEventListener('pointerup', onPointerUp);
+  window.addEventListener('pointercancel', onPointerUp);
+
+  // 键盘
+  window.addEventListener('keydown', onKeyDown);
+
+  // 尺寸适配
+  const relayout = () => { layoutCanvas(); renderOverlay(); };
+  window.addEventListener('resize', relayout);
+  if (window.ResizeObserver) new ResizeObserver(relayout).observe(dom.canvasWrap);
+}
+
+async function init() {
+  buildSwatches();
+  applyIcons();
+  setColor(state.color);
+  setSize(state.size);
+  bindUi();
+
+  // 状态栏初始文案
+  $('statusModeText').textContent = '协作模式 · AI 可参与局部方案';
+
+  // 检测哈希后端（WebCrypto 在 file:// 通常可用；不可用时自动降级）
+  await detectHashBackend();
+
+  // 载入示例作品（静默，直接给评委一个可看的画面）
+  await loadExampleArtwork({ silent: true });
+  requestAnimationFrame(() => layoutCanvas());
+  updateStatusBar();
+  console.log('[墨证 InkProof Demo] 已就绪 · 全部离线 · AI 结果为 Mock');
+}
+
+init();
+
+</script>
+</body>
+</html>
